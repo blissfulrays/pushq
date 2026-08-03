@@ -1,0 +1,88 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  go:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.26" }
+      - run: go vet ./...
+      - run: go test -race ./...
+
+  postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: pushq
+          POSTGRES_PASSWORD: pushq
+          POSTGRES_DB: pushq_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U pushq" --health-interval 2s
+          --health-timeout 5s --health-retries 20
+    env:
+      PUSHQ_TEST_PG_URL: postgres://pushq:pushq@localhost:5432/pushq_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.26" }
+      - run: go test -race -count=1 ./internal/store/postgres/ ./test/e2e/
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - run: cd web && npm install --no-audit --no-fund && npm run build
+
+  sdk-typescript:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.26" }
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - run: go build -o pushq ./cmd/pushq
+      - run: cd sdks/typescript && npm install --no-audit --no-fund && npm run build
+      - run: cd sdks/typescript && PUSHQ_BIN=$GITHUB_WORKSPACE/pushq npm test
+
+  sdk-python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.26" }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: go build -o pushq ./cmd/pushq
+      - run: cd sdks/python && pip install -e ".[dev]"
+      - run: cd sdks/python && PUSHQ_BIN=$GITHUB_WORKSPACE/pushq pytest -q
+
+  sdk-go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.26" }
+      - run: cd sdks/go && go vet ./... && go test ./...
+
+  sdk-java:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "11" }
+      - run: cd sdks/java && mvn -q --batch-mode package

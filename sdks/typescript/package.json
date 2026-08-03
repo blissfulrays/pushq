@@ -1,0 +1,49 @@
+{
+  "name": "pushq",
+  "version": "0.1.0",
+  "description": "Client for pushq — self-hosted HTTP push task queue (open-source Cloud Tasks alternative)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/blissfulrays/pushq.git",
+    "directory": "sdks/typescript"
+  },
+  "homepage": "https://github.com/blissfulrays/pushq",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18.17"
+  },
+  "scripts": {
+    "build": "tsup src/index.ts --format esm,cjs --dts --clean",
+    "test": "vitest run",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "task-queue",
+    "queue",
+    "cloud-tasks",
+    "background-jobs",
+    "webhooks",
+    "pushq"
+  ],
+  "devDependencies": {
+    "tsup": "^8.0.0",
+    "typescript": "^5.5.0",
+    "vitest": "^2.0.0"
+  }
+}

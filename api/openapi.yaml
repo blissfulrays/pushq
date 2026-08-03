@@ -1,0 +1,598 @@
+openapi: 3.1.0
+info:
+  title: pushq API
+  version: 0.1.0
+  description: |
+    pushq is a self-hosted HTTP push task queue — an open-source alternative to
+    GCP Cloud Tasks. Tasks are delivered as HTTP requests to your endpoints
+    with per-queue rate limits, concurrency caps, and GCP-compatible retry
+    semantics.
+
+    Authentication: `Authorization: Bearer <api key>`. Keys carry a role:
+    `writer` (all task operations plus queue upsert/get/stats/pause/resume/purge)
+    or `admin` (adds queue delete and list-all). A server with no keys
+    configured is unauthenticated (dev mode).
+
+    Errors are RFC 9457 `application/problem+json` with a stable machine
+    `code`: `already_exists`, `not_found`, `failed_precondition`,
+    `invalid_argument`, `unauthenticated`, `permission_denied`,
+    `payload_too_large`, `internal`.
+  license:
+    name: MIT
+servers:
+  - url: http://localhost:8080
+security:
+  - bearerAuth: []
+tags:
+  - name: queues
+  - name: tasks
+  - name: system
+
+paths:
+  /v1/queues:
+    post:
+      operationId: createQueue
+      tags: [queues]
+      summary: Create a queue (409 if it exists)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/QueueCreate' }
+      responses:
+        '201':
+          description: Created
+          content: { application/json: { schema: { $ref: '#/components/schemas/Queue' } } }
+        '409': { $ref: '#/components/responses/Problem' }
+    get:
+      operationId: listQueues
+      tags: [queues]
+      summary: List queues (admin)
+      parameters:
+        - { name: name_prefix, in: query, schema: { type: string } }
+        - { name: page_size, in: query, schema: { type: integer, maximum: 1000, default: 100 } }
+        - { name: page_token, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/QueueList' } } }
+
+  /v1/queues/{queue}:
+    parameters:
+      - { $ref: '#/components/parameters/queue' }
+    put:
+      operationId: upsertQueue
+      tags: [queues]
+      summary: Create or replace queue configuration (idempotent)
+      description: |
+        Full desired config; omitted fields take server defaults. Exceptions:
+        `target.signing_secret` omitted keeps the stored secret (send `""` to
+        clear), and an upsert never changes the queue's run state — a paused
+        queue stays paused. An unchanged upsert writes nothing.
+        The `X-Pushq-Result` response header reports `created`, `updated`, or
+        `unchanged`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/QueuePut' }
+      responses:
+        '200':
+          description: Updated or unchanged
+          content: { application/json: { schema: { $ref: '#/components/schemas/Queue' } } }
+        '201':
+          description: Created
+          content: { application/json: { schema: { $ref: '#/components/schemas/Queue' } } }
+    get:
+      operationId: getQueue
+      tags: [queues]
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/Queue' } } }
+        '404': { $ref: '#/components/responses/Problem' }
+    patch:
+      operationId: patchQueue
+      tags: [queues]
+      summary: Update only the provided fields (can also set state, incl. disabled)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/QueuePatch' }
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/Queue' } } }
+    delete:
+      operationId: deleteQueue
+      tags: [queues]
+      summary: Delete a queue and all its tasks (admin)
+      responses:
+        '204': { description: Deleted }
+        '404': { $ref: '#/components/responses/Problem' }
+
+  /v1/queues/{queue}:pause:
+    post:
+      operationId: pauseQueue
+      tags: [queues]
+      summary: Stop dispatching (task creation still allowed)
+      parameters: [{ $ref: '#/components/parameters/queue' }]
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/Queue' } } }
+
+  /v1/queues/{queue}:resume:
+    post:
+      operationId: resumeQueue
+      tags: [queues]
+      summary: Resume dispatching
+      parameters: [{ $ref: '#/components/parameters/queue' }]
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/Queue' } } }
+
+  /v1/queues/{queue}:purge:
+    post:
+      operationId: purgeQueue
+      tags: [queues]
+      summary: Delete all tasks created up to now (exact watermark)
+      description: |
+        Instant and exact: every task created at or before the purge moment —
+        including in-flight ones, whose results are discarded — is removed.
+        Their IDs become reusable. Tasks created after the purge are unaffected.
+      parameters: [{ $ref: '#/components/parameters/queue' }]
+      responses:
+        '202':
+          description: Purge accepted
+          content: { application/json: { schema: { $ref: '#/components/schemas/Queue' } } }
+
+  /v1/queues/{queue}/stats:
+    get:
+      operationId: getQueueStats
+      tags: [queues]
+      summary: Live counts and recent dispatch/error rates
+      parameters:
+        - { $ref: '#/components/parameters/queue' }
+        - name: id_prefix
+          in: query
+          description: Scope counts to task IDs with this prefix
+          schema: { type: string }
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/QueueStats' } } }
+
+  /v1/queues/{queue}/tasks:
+    parameters:
+      - { $ref: '#/components/parameters/queue' }
+    post:
+      operationId: createTask
+      tags: [tasks]
+      summary: Enqueue a task
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TaskCreate' }
+      responses:
+        '201':
+          description: Created
+          content: { application/json: { schema: { $ref: '#/components/schemas/Task' } } }
+        '409': { $ref: '#/components/responses/Problem' }
+    get:
+      operationId: listTasks
+      tags: [tasks]
+      parameters:
+        - { name: state, in: query, schema: { type: string, enum: [pending, running, succeeded, failed] } }
+        - { name: id_prefix, in: query, schema: { type: string } }
+        - { name: view, in: query, schema: { type: string, enum: [basic, full], default: basic } }
+        - { name: page_size, in: query, schema: { type: integer, maximum: 1000, default: 100 } }
+        - { name: page_token, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: OK (newest first)
+          content: { application/json: { schema: { $ref: '#/components/schemas/TaskList' } } }
+
+  /v1/queues/{queue}/tasks:batch:
+    post:
+      operationId: createTasks
+      tags: [tasks]
+      summary: Enqueue up to 500 tasks (non-atomic, per-item results)
+      parameters: [{ $ref: '#/components/parameters/queue' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tasks]
+              properties:
+                tasks:
+                  type: array
+                  maxItems: 500
+                  items: { $ref: '#/components/schemas/TaskCreate' }
+      responses:
+        '200':
+          description: Per-item results in request order
+          content: { application/json: { schema: { $ref: '#/components/schemas/BatchResponse' } } }
+
+  /v1/queues/{queue}/tasks/{task_id}:
+    parameters:
+      - { $ref: '#/components/parameters/queue' }
+      - { $ref: '#/components/parameters/task_id' }
+    get:
+      operationId: getTask
+      tags: [tasks]
+      parameters:
+        - { name: view, in: query, schema: { type: string, enum: [basic, full], default: basic } }
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/Task' } } }
+        '404': { $ref: '#/components/responses/Problem' }
+    delete:
+      operationId: deleteTask
+      tags: [tasks]
+      summary: Delete a task (ID stays reserved for the dedup window)
+      responses:
+        '204': { description: Deleted }
+        '404': { $ref: '#/components/responses/Problem' }
+
+  /v1/queues/{queue}/tasks/{task_id}:run:
+    post:
+      operationId: runTask
+      tags: [tasks]
+      summary: Force immediate dispatch (bypasses rate limits and PAUSED)
+      parameters:
+        - { $ref: '#/components/parameters/queue' }
+        - { $ref: '#/components/parameters/task_id' }
+      responses:
+        '200':
+          description: Dispatch triggered
+          content: { application/json: { schema: { $ref: '#/components/schemas/Task' } } }
+        '400': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+
+  /v1/queues/{queue}/tasks/{task_id}/attempts:
+    get:
+      operationId: listAttempts
+      tags: [tasks]
+      summary: Attempt history, newest first
+      parameters:
+        - { $ref: '#/components/parameters/queue' }
+        - { $ref: '#/components/parameters/task_id' }
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/AttemptList' } } }
+
+  /v1/version:
+    get:
+      operationId: getVersion
+      tags: [system]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  version: { type: string }
+                  commit: { type: string }
+                  dialect: { type: string, enum: [sqlite, postgres] }
+
+  /healthz:
+    get:
+      operationId: healthz
+      tags: [system]
+      security: []
+      responses:
+        '200': { description: Alive }
+
+  /readyz:
+    get:
+      operationId: readyz
+      tags: [system]
+      security: []
+      responses:
+        '200':
+          description: Ready
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  role: { type: string, enum: [leader, follower, stopped, api] }
+                  dialect: { type: string }
+        '503': { $ref: '#/components/responses/Problem' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  parameters:
+    queue:
+      name: queue
+      in: path
+      required: true
+      schema: { type: string, pattern: '^[a-z0-9][a-z0-9-]{0,99}$' }
+    task_id:
+      name: task_id
+      in: path
+      required: true
+      schema: { type: string, pattern: '^[A-Za-z0-9_-]{1,500}$' }
+  responses:
+    Problem:
+      description: Error
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+  schemas:
+    Problem:
+      type: object
+      properties:
+        type: { type: string }
+        title: { type: string }
+        status: { type: integer }
+        code:
+          type: string
+          enum: [already_exists, not_found, failed_precondition, invalid_argument,
+                 unauthenticated, permission_denied, payload_too_large, internal]
+        detail: { type: string }
+        instance: { type: string }
+
+    RateLimits:
+      type: object
+      properties:
+        max_dispatches_per_second:
+          type: number
+          exclusiveMinimum: 0
+          maximum: 10000
+          default: 500
+        max_burst_size:
+          type: integer
+          minimum: 0
+          maximum: 10000
+          description: 0/omitted = auto (clamp(ceil(rate), 1, 500))
+        max_concurrent_dispatches:
+          type: integer
+          minimum: 1
+          maximum: 10000
+          default: 1000
+
+    Retry:
+      type: object
+      description: GCP Cloud Tasks retry semantics. On a task, any subset overrides the queue config.
+      properties:
+        max_attempts:
+          type: integer
+          minimum: -1
+          default: 100
+          description: Includes the first attempt; -1 = unlimited. When both max_attempts and max_retry_duration_seconds are set, retries continue until BOTH are reached (GCP parity).
+        max_retry_duration_seconds:
+          type: number
+          minimum: 0
+          default: 0
+          description: Measured from the first attempt; 0 = unlimited.
+        min_backoff_seconds: { type: number, minimum: 0, default: 0.1 }
+        max_backoff_seconds: { type: number, minimum: 0, default: 3600 }
+        max_doublings:
+          type: integer
+          minimum: 0
+          maximum: 31
+          default: 16
+          description: Interval doubles this many times, then grows linearly by 2^max_doublings × min_backoff, capped at max_backoff.
+
+    Target:
+      type: object
+      properties:
+        base_url:
+          type: string
+          description: Absolute http(s) URL; resolves tasks that use a relative `path`.
+        method:
+          type: string
+          enum: [GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS]
+          description: Overrides every task's method when set.
+        headers:
+          type: object
+          additionalProperties: { type: string }
+          description: Merged over task headers at dispatch (queue wins). Use for static auth headers.
+        signing_secret:
+          type: string
+          description: Standard Webhooks secret (`whsec_…`). Deliveries carry webhook-id/-timestamp/-signature headers. On PUT, omitted = keep stored secret, "" = clear. Never returned.
+
+    QueuePut:
+      type: object
+      properties:
+        rate_limits: { $ref: '#/components/schemas/RateLimits' }
+        retry: { $ref: '#/components/schemas/Retry' }
+        target: { $ref: '#/components/schemas/Target' }
+        dead_letter_queue:
+          type: string
+          description: Queue that receives a copy of permanently failed tasks (with X-Pushq-Deadletter-* headers).
+
+    QueueCreate:
+      allOf:
+        - type: object
+          required: [name]
+          properties:
+            name: { type: string, pattern: '^[a-z0-9][a-z0-9-]{0,99}$' }
+        - { $ref: '#/components/schemas/QueuePut' }
+
+    QueuePatch:
+      type: object
+      properties:
+        state: { type: string, enum: [running, paused, disabled] }
+        rate_limits: { $ref: '#/components/schemas/RateLimits' }
+        retry: { $ref: '#/components/schemas/Retry' }
+        target: { $ref: '#/components/schemas/Target' }
+        dead_letter_queue: { type: string }
+
+    Queue:
+      type: object
+      properties:
+        name: { type: string }
+        state: { type: string, enum: [running, paused, disabled] }
+        rate_limits:
+          type: object
+          properties:
+            max_dispatches_per_second: { type: number }
+            max_burst_size: { type: integer, description: Resolved effective burst }
+            max_concurrent_dispatches: { type: integer }
+        retry:
+          type: object
+          properties:
+            max_attempts: { type: integer }
+            max_retry_duration_seconds: { type: number }
+            min_backoff_seconds: { type: number }
+            max_backoff_seconds: { type: number }
+            max_doublings: { type: integer }
+        target:
+          type: object
+          properties:
+            base_url: { type: string }
+            method: { type: string }
+            headers: { type: object, additionalProperties: { type: string } }
+            has_signing_secret: { type: boolean }
+        dead_letter_queue: { type: string }
+        purged_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    QueueList:
+      type: object
+      properties:
+        queues:
+          type: array
+          items: { $ref: '#/components/schemas/Queue' }
+        next_page_token: { type: string }
+
+    QueueStats:
+      type: object
+      properties:
+        state: { type: string }
+        pending: { type: integer, description: Due now or overdue }
+        running: { type: integer }
+        succeeded: { type: integer, description: Within the retention window }
+        failed: { type: integer, description: Within the retention window }
+        scheduled_future: { type: integer }
+        oldest_due_at: { type: string, format: date-time }
+        oldest_due_age_seconds: { type: number }
+        dispatched_last_1m: { type: integer }
+        errors_last_1m: { type: integer }
+        dispatched_last_1h: { type: integer }
+        errors_last_1h: { type: integer }
+        last_purge: { type: string, format: date-time }
+
+    TaskCreate:
+      type: object
+      properties:
+        task_id:
+          type: string
+          pattern: '^[A-Za-z0-9_-]{1,500}$'
+          description: Client-chosen ID for dedup; 409 on collision. Omitted = server-generated UUIDv7. IDs stay reserved for the dedup window (default 1h) after completion/deletion.
+        url:
+          type: string
+          description: Absolute http(s) target. Exactly one of url/path.
+        path:
+          type: string
+          description: Path resolved against the queue's target.base_url at dispatch time.
+        method:
+          type: string
+          enum: [GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS]
+          default: POST
+        headers:
+          type: object
+          additionalProperties: { type: string }
+        body_base64:
+          type: string
+          description: Raw body, base64. Exclusive with json_body. POST/PUT/PATCH only.
+        json_body:
+          description: Arbitrary JSON sent as the body with Content-Type application/json. Exclusive with body_base64.
+        schedule_time:
+          type: string
+          format: date-time
+          description: Exclusive with delay_seconds. Default = now.
+        delay_seconds: { type: number, minimum: 0 }
+        dispatch_deadline_seconds:
+          type: number
+          minimum: 15
+          maximum: 1800
+          default: 600
+        retry:
+          $ref: '#/components/schemas/Retry'
+          description: Per-task override of the queue retry config (any subset).
+
+    Task:
+      type: object
+      properties:
+        id: { type: string }
+        queue: { type: string }
+        state: { type: string, enum: [pending, running, succeeded, failed] }
+        url: { type: string }
+        method: { type: string }
+        headers: { type: object, additionalProperties: { type: string } }
+        body_base64: { type: string, description: Only with view=full }
+        schedule_time: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+        dispatch_deadline_seconds: { type: number }
+        retry: { $ref: '#/components/schemas/Retry' }
+        dispatch_count: { type: integer }
+        response_count: { type: integer }
+        first_attempt_at: { type: string, format: date-time }
+        finished_at: { type: string, format: date-time }
+        last_attempt:
+          type: object
+          properties:
+            at: { type: string, format: date-time }
+            status: { type: integer }
+            error: { type: string }
+
+    TaskList:
+      type: object
+      properties:
+        tasks:
+          type: array
+          items: { $ref: '#/components/schemas/Task' }
+        next_page_token: { type: string }
+
+    BatchResponse:
+      type: object
+      properties:
+        results:
+          type: array
+          items:
+            type: object
+            properties:
+              index: { type: integer }
+              task: { $ref: '#/components/schemas/Task' }
+              error:
+                type: object
+                properties:
+                  code: { type: string }
+                  detail: { type: string }
+
+    Attempt:
+      type: object
+      properties:
+        number: { type: integer }
+        dispatch_time: { type: string, format: date-time }
+        response_time: { type: string, format: date-time }
+        response_status: { type: integer }
+        error_kind:
+          type: string
+          enum: [timeout, connect, dns, tls, non_2xx, lease_lost, config]
+        error_snippet: { type: string }
+        duration_ms: { type: integer }
+
+    AttemptList:
+      type: object
+      properties:
+        attempts:
+          type: array
+          items: { $ref: '#/components/schemas/Attempt' }

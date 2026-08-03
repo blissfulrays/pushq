@@ -1,0 +1,45 @@
+version: 2
+project_name: pushq
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: pushq
+    main: ./cmd/pushq
+    binary: pushq
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ignore:
+      - { goos: windows, goarch: arm64 }
+    ldflags:
+      - -s -w
+      - -X github.com/blissfulrays/pushq/internal/version.Version={{.Version}}
+      - -X github.com/blissfulrays/pushq/internal/version.Commit={{.ShortCommit}}
+
+archives:
+  - formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files: [LICENSE, README.md]
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude: ["^docs:", "^test:", "^chore:"]
+
+release:
+  draft: true
+
+# Uncomment once a homebrew tap repo exists:
+# brews:
+#   - repository: { owner: blissfulrays, name: homebrew-tap }
+#     homepage: https://github.com/blissfulrays/pushq
+#     description: Self-hosted HTTP push task queue (open-source Cloud Tasks alternative)
+#     license: MIT

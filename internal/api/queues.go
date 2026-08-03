@@ -1,0 +1,195 @@
+package api
+
+import (
+	"net/http"
+	"strconv"
+
+	"github.com/go-chi/chi/v5"
+
+	"github.com/blissfulrays/pushq/internal/api/types"
+	"github.com/blissfulrays/pushq/internal/store"
+)
+
+func (s *Server) handleQueueCreate(w http.ResponseWriter, r *http.Request) {
+	var body types.QueueCreate
+	if err := s.decodeJSON(w, r, &body, 256<<10); err != nil {
+		s.writeErr(w, r, err)
+		return
+	}
+	u, err := queuePutToUpsert(body.Name, body.QueuePut)
+	if err != nil {
+		s.writeErr(w, r, err)
+		return
+	}
+	u.KeepSecret = false
+	q, err := s.Store.CreateQueue(r.Context(), u, s.Now())
+	if err != nil {
+		s.writeErr(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, queueToResponse(q))
+}
+
+func (s *Server) handleQueuePut(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "queue")
+	var body types.QueuePut
+	if err := s.decodeJSON(w, r, &body, 256<<10); err != nil {
+		s.writeErr(w, r, err)
+		return
+	}
+	u, err := queuePutToUpsert(name, body)
+	if err != nil {
+		s.writeErr(w, r, err)
+		return
+	}
+	q, outcome, err := s.Store.UpsertQueue(r.Context(), u, s.Now())
+	if err != nil {
+		s.writeErr(w, r, err)
+		return
+	}
+	status := http.StatusOK
+	result := "updated"
+	switch outcome {
+	case store.UpsertCreated:
+		status = http.StatusCreated
+		result = "created"
+	case store.UpsertNoop:
+		result = "unchanged"
+	}
+	w.Header().Set("X-Pushq-Result", result)
+	writeJSON(w, status, queueToResponse(q))
+}
+
+func (s *Server) handleQueueGet(w http.ResponseWriter, r *http.Request) {
+	q, err := s.Store.GetQueue(r.Context(), chi.URLParam(r, "queue"))
+	if err != nil {
+		s.writeErr(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, queueToResponse(q))
+}
+
+func (s *Server) handleQueuePatch(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "queue")
+	var body types.QueuePatch
+	if err := s.decodeJSON(w, r, &body, 256<<10); err != nil {
+		s.writeErr(w, r, err)
+		return
+	}
+	p, err := queuePatchToStore(body)
+	if err != nil {
+		s.writeErr(w, r, err)
+		return
+	}
+	q, err := s.Store.PatchQueue(r.Context(), name, p, s.Now())
+	if err != nil {
+		s.writeErr(w, r, err)
+		return
+	}
+	// Re-validate the merged result so a patch cannot leave invalid config.
+	if err := validateUpsert(store.QueueUpsert{
+		Name: q.Name, RateLimits: q.RateLimits, Retry: q.Retry, Target: q.Target,
+		DeadLetterQueue: q.DeadLetterQueue,
+	}); err != nil {
+		s.writeErr(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, queueToResponse(q))
+}
+
+func (s *Server) handleQueueList(w http.ResponseWriter, r *http.Request) {
+	opts := store.ListQueuesOpts{
+		NamePrefix: r.URL.Query().Get("name_prefix"),
+		PageToken:  r.URL.Query().Get("page_token"),
+	}
+	if v := r.URL.Query().Get("page_size"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			s.writeErr(w, r, errf("page_size must be an integer"))
+			return
+		}
+		opts.PageSize = n
+	}
+	queues, next, err := s.Store.ListQueues(r.Context(), opts)
+	if err != nil {
+		s.writeErr(w, r, err)
+		return
+	}
+	out := types.QueueList{Queues: []types.QueueResponse{}, NextPageToken: next}
+	for _, q := range queues {
+		out.Queues = append(out.Queues, queueToResponse(q))
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleQueueDelete(w http.ResponseWriter, r *http.Request) {
+	if err := s.Store.DeleteQueue(r.Context(), chi.URLParam(r, "queue")); err != nil {
+		s.writeErr(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleQueuePause(w http.ResponseWriter, r *http.Request) {
+	q, err := s.Store.SetQueueState(r.Context(), chi.URLParam(r, "queue"), store.QueuePaused, s.Now())
+	if err != nil {
+		s.writeErr(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, queueToResponse(q))
+}
+
+func (s *Server) handleQueueResume(w http.ResponseWriter, r *http.Request) {
+	q, err := s.Store.SetQueueState(r.Context(), chi.URLParam(r, "queue"), store.QueueRunning, s.Now())
+	if err != nil {
+		s.writeErr(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, queueToResponse(q))
+}
+
+func (s *Server) handleQueuePurge(w http.ResponseWriter, r *http.Request) {
+	q, err := s.Store.PurgeQueue(r.Context(), chi.URLParam(r, "queue"), s.Now())
+	if err != nil {
+		s.writeErr(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, queueToResponse(q))
+}
+
+func (s *Server) handleQueueStats(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "queue")
+	now := s.Now()
+	q, err := s.Store.GetQueue(r.Context(), name)
+	if err != nil {
+		s.writeErr(w, r, err)
+		return
+	}
+	st, err := s.Store.QueueStats(r.Context(), name, r.URL.Query().Get("id_prefix"), now)
+	if err != nil {
+		s.writeErr(w, r, err)
+		return
+	}
+	out := types.QueueStatsResponse{
+		State:           string(q.State),
+		Pending:         st.Pending,
+		Running:         st.Running,
+		Succeeded:       st.Succeeded,
+		Failed:          st.Failed,
+		ScheduledFuture: st.ScheduledFuture,
+		OldestDueAt:     st.OldestDueAt,
+		Dispatched1m:    st.Dispatched1m,
+		Errors1m:        st.Errors1m,
+		Dispatched1h:    st.Dispatched1h,
+		Errors1h:        st.Errors1h,
+		LastPurge:       q.PurgedAt,
+	}
+	if st.OldestDueAt != nil {
+		age := now.Sub(*st.OldestDueAt).Seconds()
+		if age < 0 {
+			age = 0
+		}
+		out.OldestDueAge = &age
+	}
+	writeJSON(w, http.StatusOK, out)
+}

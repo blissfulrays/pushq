@@ -1,0 +1,13 @@
+/pushq
+/dist/
+*.db
+*.db-wal
+*.db-shm
+.DS_Store
+node_modules/
+web/.svelte-kit/
+sdks/python/.venv/
+sdks/python/dist/
+sdks/typescript/dist/
+sdks/java/target/
+coverage.out
