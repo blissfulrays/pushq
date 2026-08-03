@@ -20,9 +20,26 @@
     </license>
   </licenses>
 
+  <!-- developers and scm are mandatory for Maven Central. -->
+  <developers>
+    <developer>
+      <id>blissfulrays</id>
+      <name>blissfulrays</name>
+      <url>https://github.com/blissfulrays</url>
+    </developer>
+  </developers>
+
+  <scm>
+    <connection>scm:git:https://github.com/blissfulrays/pushq.git</connection>
+    <developerConnection>scm:git:ssh://git@github.com/blissfulrays/pushq.git</developerConnection>
+    <url>https://github.com/blissfulrays/pushq</url>
+  </scm>
+
   <properties>
     <maven.compiler.release>11</maven.compiler.release>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <!-- Fixed timestamp => byte-identical jars across rebuilds. Bump per release. -->
+    <project.build.outputTimestamp>2026-01-01T00:00:00Z</project.build.outputTimestamp>
     <jackson.version>2.19.0</jackson.version>
     <junit.version>5.12.2</junit.version>
   </properties>
@@ -48,6 +65,21 @@
   </dependencies>
 
   <build>
+    <resources>
+      <!-- Keep the conventional resource dir working if one is ever added. -->
+      <resource>
+        <directory>src/main/resources</directory>
+      </resource>
+      <!-- Ship the license inside the jar, as redistribution requires. -->
+      <resource>
+        <directory>${project.basedir}</directory>
+        <targetPath>META-INF</targetPath>
+        <includes>
+          <include>LICENSE</include>
+        </includes>
+      </resource>
+    </resources>
+
     <plugins>
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
@@ -63,7 +95,98 @@
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-jar-plugin</artifactId>
         <version>3.4.1</version>
+        <configuration>
+          <archive>
+            <manifestEntries>
+              <!-- Stable JPMS module name for consumers with a module-info.
+                   Without this the name is derived from the jar filename,
+                   which the JDK warns is unstable. -->
+              <Automatic-Module-Name>io.pushq</Automatic-Module-Name>
+            </manifestEntries>
+          </archive>
+        </configuration>
       </plugin>
     </plugins>
   </build>
+
+  <!--
+    Everything Maven Central additionally requires (sources jar, javadoc jar,
+    GPG signatures, the Central Portal uploader) lives in this profile so a
+    plain `mvn package` during development stays fast and needs no GPG key.
+
+    Release:  mvn -P release deploy
+    See docs/publishing.md for the one-time account setup.
+  -->
+  <profiles>
+    <profile>
+      <id>release</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-source-plugin</artifactId>
+            <version>3.3.1</version>
+            <executions>
+              <execution>
+                <id>attach-sources</id>
+                <goals><goal>jar-no-fork</goal></goals>
+              </execution>
+            </executions>
+          </plugin>
+
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-javadoc-plugin</artifactId>
+            <version>3.11.2</version>
+            <executions>
+              <execution>
+                <id>attach-javadocs</id>
+                <goals><goal>jar</goal></goals>
+              </execution>
+            </executions>
+            <configuration>
+              <!-- Doclint would fail the build on cosmetic Javadoc issues. -->
+              <doclint>none</doclint>
+              <quiet>true</quiet>
+            </configuration>
+          </plugin>
+
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-gpg-plugin</artifactId>
+            <version>3.2.7</version>
+            <executions>
+              <execution>
+                <id>sign-artifacts</id>
+                <phase>verify</phase>
+                <goals><goal>sign</goal></goals>
+                <configuration>
+                  <!-- Non-interactive signing in CI (key passphrase via env). -->
+                  <gpgArguments>
+                    <arg>--pinentry-mode</arg>
+                    <arg>loopback</arg>
+                  </gpgArguments>
+                </configuration>
+              </execution>
+            </executions>
+          </plugin>
+
+          <plugin>
+            <groupId>org.sonatype.central</groupId>
+            <artifactId>central-publishing-maven-plugin</artifactId>
+            <version>0.11.0</version>
+            <extensions>true</extensions>
+            <configuration>
+              <!-- Credentials come from the "central" server in settings.xml. -->
+              <publishingServerId>central</publishingServerId>
+              <!-- Upload and release in one step; set to false to stage and
+                   press "Publish" manually in the Central Portal UI. -->
+              <autoPublish>true</autoPublish>
+              <waitUntil>published</waitUntil>
+            </configuration>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+  </profiles>
 </project>

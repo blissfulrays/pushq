@@ -15,11 +15,22 @@ classifiers = [
   "Development Status :: 4 - Beta",
   "Intended Audience :: Developers",
   "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3 :: Only",
   "Topic :: System :: Distributed Computing",
+  "Typing :: Typed",
 ]
 
 [project.urls]
 Homepage = "https://github.com/blissfulrays/pushq"
+Documentation = "https://github.com/blissfulrays/pushq/tree/main/sdks/python#readme"
+Repository = "https://github.com/blissfulrays/pushq"
+Issues = "https://github.com/blissfulrays/pushq/issues"
+Changelog = "https://github.com/blissfulrays/pushq/releases"
 
 [project.optional-dependencies]
 dev = ["pytest>=7", "pytest-asyncio>=0.23"]

@@ -1,14 +1,35 @@
 name: release
 
+# Tagging vX.Y.Z publishes everything at that version: binaries, the Docker
+# image, and all four SDKs. Each SDK job no-ops until its credentials exist,
+# so you can enable registries one at a time. See docs/publishing.md.
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish (without the leading v), e.g. 0.1.0"
+        required: true
 
 permissions:
   contents: write
-  packages: write
 
 jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - id: v
+        # Tag v0.1.0 -> 0.1.0
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then
+            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          fi
+
   goreleaser:
     runs-on: ubuntu-latest
     steps:
@@ -28,8 +49,12 @@ jobs:
 
   docker:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -48,31 +73,121 @@ jobs:
             ghcr.io/${{ github.repository }}:latest
             ghcr.io/${{ github.repository }}:${{ github.ref_name }}
 
-  # Publishing SDKs needs registry credentials; each job is a no-op until the
-  # corresponding secret exists.
+  # --- SDKs ---
+
   npm:
+    needs: version
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # required by `npm publish --provenance`
+    env:
+      # Secrets aren't readable from a step `if:`; surface it as job env first.
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: "22", registry-url: "https://registry.npmjs.org" }
-      - run: cd sdks/typescript && npm install --no-audit --no-fund && npm run build
-      - if: env.NODE_AUTH_TOKEN != ''
+      - name: Set version and build
+        run: |
+          cd sdks/typescript
+          npm pkg set version="${{ needs.version.outputs.version }}"
+          npm install --no-audit --no-fund
+          npm run build
+      # Last gate before an immutable publish.
+      - name: Validate package exports
+        run: cd sdks/typescript && npm run check:exports
+      - name: Publish
+        if: env.NPM_TOKEN != ''
         run: cd sdks/typescript && npm publish --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   pypi:
+    needs: version
     runs-on: ubuntu-latest
-    environment: pypi   # configure PyPI Trusted Publishing for this repo+environment
+    environment: pypi # PyPI Trusted Publishing is scoped to this environment
     permissions:
+      contents: read
       id-token: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
-      - run: pip install build && cd sdks/python && python -m build
+      - name: Set version and build
+        run: |
+          cd sdks/python
+          V="${{ needs.version.outputs.version }}"
+          sed -i "s/^version = .*/version = \"$V\"/" pyproject.toml
+          sed -i "s/^__version__ = .*/__version__ = \"$V\"/" src/pushq/__init__.py
+          pip install build twine
+          python -m build
+      # Last gate before an immutable upload: PyPI's own metadata validation
+      # plus a check that the PEP 561 marker actually shipped.
+      - name: Validate distributions
+        run: |
+          cd sdks/python
+          twine check dist/*
+          python - <<'PY'
+          import glob, zipfile
+          names = zipfile.ZipFile(glob.glob("dist/*.whl")[0]).namelist()
+          assert "pushq/py.typed" in names, "py.typed missing from wheel"
+          PY
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: sdks/python/dist
           skip-existing: true
+
+  maven:
+    needs: version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "11"
+          server-id: central # must match <publishingServerId> in pom.xml
+          server-username: MAVEN_USERNAME
+          server-password: MAVEN_PASSWORD
+          gpg-private-key: ${{ secrets.GPG_PRIVATE_KEY }}
+          gpg-passphrase: MAVEN_GPG_PASSPHRASE
+      - name: Set version
+        run: |
+          cd sdks/java
+          mvn -q --batch-mode versions:set \
+            -DnewVersion="${{ needs.version.outputs.version }}" -DgenerateBackupPoms=false
+      - name: Publish to Maven Central
+        if: env.MAVEN_CENTRAL_USERNAME != ''
+        run: cd sdks/java && mvn -P release --batch-mode deploy
+        env:
+          MAVEN_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          MAVEN_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+
+  # The Go SDK is a nested module: `go get .../sdks/go@vX.Y.Z` resolves the
+  # tag `sdks/go/vX.Y.Z`, not the repo-root tag. Nothing to upload — the proxy
+  # fetches from the tag itself.
+  go-sdk-tag:
+    needs: version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: Tag sdks/go
+        run: |
+          TAG="sdks/go/v${{ needs.version.outputs.version }}"
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "$TAG already exists; nothing to do"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "$TAG"
+          git push origin "$TAG"

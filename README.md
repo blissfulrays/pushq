@@ -149,4 +149,7 @@ make test-pg     # + Postgres conformance and blue/green tests (needs PUSHQ_TEST
 make build       # binary with embedded dashboard
 ```
 
+Cutting a release (binaries, Docker image, and all four SDKs from one tag):
+[docs/publishing.md](docs/publishing.md).
+
 MIT licensed.
