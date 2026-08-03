@@ -86,12 +86,14 @@ jobs:
       - id: tags
         run: |
           V="${{ needs.version.outputs.version }}"
-          REPO="ghcr.io/${{ github.repository }}"
+          # github.repository keeps the org's capitalisation (Blissfulrays/pushq)
+          # but container registries reject uppercase in repository names.
+          REPO="ghcr.io/$(echo "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
           {
             echo "value<<TAGS"
-            echo "$REPO:$V"
+            echo "${REPO}:${V}"
             if [ "${{ needs.version.outputs.prerelease }}" != "true" ]; then
-              echo "$REPO:latest"
+              echo "${REPO}:latest"
             fi
             echo "TAGS"
           } >> "$GITHUB_OUTPUT"
