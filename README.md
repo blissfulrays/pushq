@@ -63,6 +63,12 @@ docker run -p 8080:8080 -v pushq-data:/data ghcr.io/blissfulrays/pushq serve --d
 go install github.com/blissfulrays/pushq/cmd/pushq@latest
 ```
 
+Release binaries and the Docker image bundle the dashboard. `go install` does
+not — the compiled dashboard is a build artifact rather than a committed file,
+and the Go module proxy never runs npm. Such a build is fully functional and
+serves a short placeholder at `/ui/`. To get the dashboard from source, run
+`make build`, which builds the frontend first (needs Node 20+).
+
 ## Run
 
 ```bash

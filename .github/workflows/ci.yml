@@ -45,7 +45,29 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: "22" }
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.26" }
       - run: cd web && npm install --no-audit --no-fund && npm run build
+      - run: cd web && npm run check
+      # The other Go jobs compile against the committed build/.gitkeep stub,
+      # so this is the only place that proves the real dashboard embeds and
+      # serves — including the SPA fallback for client-side routes.
+      - name: Verify the dashboard embeds and serves
+        run: |
+          test -f web/build/index.html
+          test -f web/build/.gitkeep   # build must not delete the stub
+          go build -o pushq ./cmd/pushq
+          ./pushq dev --listen :18080 --memory &
+          for i in $(seq 30); do curl -sf localhost:18080/healthz >/dev/null && break; sleep 0.5; done
+
+          curl -sf localhost:18080/ui/ | grep -q '<title>pushq</title>'
+          curl -sf localhost:18080/ui/ | grep -q 'not bundled' \
+            && { echo "placeholder served — real dashboard did not embed"; exit 1; }
+
+          ASSET=$(curl -s localhost:18080/ui/ | grep -o '/ui/_app/immutable/entry/start[^"]*' | head -1)
+          test -n "$ASSET" && curl -sf -o /dev/null "localhost:18080$ASSET"
+          curl -sf -o /dev/null localhost:18080/ui/queues/demo   # SPA fallback
+          echo "dashboard embedded and serving"
 
   sdk-typescript:
     runs-on: ubuntu-latest
@@ -86,15 +108,9 @@ jobs:
           pip install mypy build twine
           python -m build
           twine check dist/*
-          python - <<'PY'
-          import glob, zipfile, sys
-          names = zipfile.ZipFile(glob.glob("dist/*.whl")[0]).namelist()
-          assert "pushq/py.typed" in names, f"py.typed missing from wheel: {names}"
-          print("py.typed present in wheel")
-          PY
-          echo 'from pushq import Pushq
-          x: int = Pushq("http://x").queue_stats("q").pending' > /tmp/consumer.py
-          mypy /tmp/consumer.py
+          python -c "import glob,zipfile,sys; n=zipfile.ZipFile(glob.glob('dist/*.whl')[0]).namelist(); sys.exit(0 if 'pushq/py.typed' in n else 'py.typed missing from wheel')"
+          printf 'from pushq import Pushq\nx: int = Pushq("http://x").queue_stats("q").pending\n' > consumer_check.py
+          mypy consumer_check.py
 
   sdk-go:
     runs-on: ubuntu-latest
@@ -123,7 +139,7 @@ jobs:
           JAR=$(ls target/pushq-*.jar | grep -v -- '-sources\|-javadoc' | head -1)
 
           # Consumers on Java 11 get UnsupportedClassVersionError if this drifts.
-          MAJOR=$(unzip -p "$JAR" io/pushq/Pushq.class | head -c 8 | od -An -tu1 | awk '{print $8}')
+          MAJOR=$(javap -verbose -cp "$JAR" io.pushq.Pushq | grep -m1 'major version' | tr -dc '0-9')
           test "$MAJOR" = "55" || { echo "bytecode major $MAJOR, expected 55 (Java 11)"; exit 1; }
 
           unzip -p "$JAR" META-INF/MANIFEST.MF | grep -q 'Automatic-Module-Name: io.pushq' \

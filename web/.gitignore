@@ -1,6 +1,17 @@
 node_modules/
 .svelte-kit/
-build/
 vite.config.ts.timestamp-*
 vite.config.js.timestamp-*
 .DS_Store
+
+# The compiled dashboard is a build artifact — CI, Docker, and GoReleaser
+# each run `npm run build` before compiling the binary, so it is not committed.
+#
+# build/.gitkeep IS committed on purpose: cmd/pushq embeds this directory with
+# //go:embed all:build, which fails to compile when the directory has no files.
+# Keeping the stub means `go build`, `go test`, and
+# `go install github.com/blissfulrays/pushq/cmd/pushq@latest` all work without
+# Node installed — that build just serves a placeholder at /ui/ instead of the
+# real dashboard.
+build/*
+!build/.gitkeep

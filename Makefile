@@ -5,11 +5,11 @@ LDFLAGS  = -s -w -X github.com/blissfulrays/pushq/internal/version.Version=$(VER
                  -X github.com/blissfulrays/pushq/internal/version.Commit=$(COMMIT)
 
 .PHONY: build
-build: web ## Build the pushq binary (with embedded dashboard)
+build: web ## Build the binary with the dashboard embedded (needs Node)
 	$(GO) build -trimpath -ldflags '$(LDFLAGS)' -o pushq ./cmd/pushq
 
-.PHONY: build-nofrontend
-build-nofrontend: ## Build without rebuilding the dashboard
+.PHONY: build-go
+build-go: ## Build Go only — dashboard serves a placeholder unless web/build is populated
 	$(GO) build -trimpath -ldflags '$(LDFLAGS)' -o pushq ./cmd/pushq
 
 .PHONY: web
@@ -27,12 +27,12 @@ test-pg: ## Full suite including Postgres (needs PUSHQ_TEST_PG_URL)
 	$(GO) test -race -count=1 ./...
 
 .PHONY: sdk-test-ts
-sdk-test-ts: build-nofrontend
+sdk-test-ts: build-go
 	cd sdks/typescript && npm install --no-audit --no-fund && npm run build && \
 		PUSHQ_BIN=$(CURDIR)/pushq npm test
 
 .PHONY: sdk-test-py
-sdk-test-py: build-nofrontend
+sdk-test-py: build-go
 	cd sdks/python && python3 -m venv .venv && .venv/bin/pip install -q --upgrade pip && \
 		.venv/bin/pip install -q -e ".[dev]" && PUSHQ_BIN=$(CURDIR)/pushq .venv/bin/pytest -q
 

@@ -11,3 +11,6 @@ sdks/python/dist/
 sdks/typescript/dist/
 sdks/java/target/
 coverage.out
+
+# transient artifact from the CI type-visibility check
+sdks/python/consumer_check.py

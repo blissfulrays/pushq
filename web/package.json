@@ -5,7 +5,8 @@
 	"type": "module",
 	"scripts": {
 		"dev": "vite dev",
-		"build": "vite build",
+		"build": "vite build && npm run keep",
+		"keep": "node -e \"require('fs').writeFileSync('build/.gitkeep','')\"",
 		"preview": "vite preview",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
 		"prepare": "svelte-kit sync || echo ''"

@@ -128,11 +128,7 @@ jobs:
         run: |
           cd sdks/python
           twine check dist/*
-          python - <<'PY'
-          import glob, zipfile
-          names = zipfile.ZipFile(glob.glob("dist/*.whl")[0]).namelist()
-          assert "pushq/py.typed" in names, "py.typed missing from wheel"
-          PY
+          python -c "import glob,zipfile,sys; n=zipfile.ZipFile(glob.glob('dist/*.whl')[0]).namelist(); sys.exit(0 if 'pushq/py.typed' in n else 'py.typed missing from wheel')"
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: sdks/python/dist
