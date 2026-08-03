@@ -7,8 +7,8 @@ which stamps that version into every SDK and pushes to each registry:
 |---|---|---|---|
 | Binaries | GitHub Releases | none (built-in token) | — |
 | Docker | ghcr.io | none (built-in token) | — |
-| TypeScript | npm | `NPM_TOKEN` | yes |
-| Python | PyPI | Trusted Publishing (no secret) | fails loudly |
+| TypeScript | npm | `NPM_TOKEN` secret | yes |
+| Python | PyPI | Trusted Publishing + repo variable `PUBLISH_PYPI=true` | yes |
 | Java | Maven Central | 4 secrets (see below) | yes |
 | Go | none — just a git tag | none | — |
 
@@ -128,6 +128,31 @@ tag **`sdks/go/v0.1.0`**, not the repo-root `v0.1.0`. The `go-sdk-tag` job
 creates it for you on every release.
 
 ---
+
+## Beta / prerelease
+
+Any tag with a hyphen is treated as a prerelease, and every registry is told
+to keep it off the default install path:
+
+```bash
+git tag v0.1.0-beta.1
+git push origin v0.1.0-beta.1
+```
+
+| Registry | Published as | How users get it | Default install affected? |
+|---|---|---|---|
+| npm | `0.1.0-beta.1` under dist-tag `beta` | `npm install pushq@beta` | no — `latest` unmoved |
+| PyPI | `0.1.0b1` (PEP 440 normalizes it) | `pip install --pre pushq` | no — pip skips prereleases |
+| Maven Central | `0.1.0-beta.1` | pin the version | no |
+| Go | tag `sdks/go/v0.1.0-beta.1` | `go get …/sdks/go@v0.1.0-beta.1` | no — `@latest` skips prereleases |
+| Docker | `:0.1.0-beta.1` only | pin the tag | no — `:latest` unmoved |
+| GitHub | release marked "Pre-release" | — | not shown as Latest |
+
+The dist-tag is derived from the version: `-beta.N` → `beta`, `-rc.N` → `rc`,
+`-alpha.N` → `alpha`. Iterate with `beta.2`, `beta.3`, … — every version is
+immutable, so a fix always means a new number.
+
+Promote to stable by tagging `v0.1.0` when you're happy.
 
 ## Releasing
 

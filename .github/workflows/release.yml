@@ -20,15 +20,34 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.v.outputs.version }}
+      prerelease: ${{ steps.v.outputs.prerelease }}
+      npm_tag: ${{ steps.v.outputs.npm_tag }}
     steps:
       - id: v
-        # Tag v0.1.0 -> 0.1.0
+        # Tag v0.1.0 -> 0.1.0; v0.1.0-beta.1 -> 0.1.0-beta.1 (a prerelease).
         run: |
           if [ -n "${{ inputs.version }}" ]; then
-            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+            V="${{ inputs.version }}"
           else
-            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+            V="${GITHUB_REF_NAME#v}"
           fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+
+          # Anything with a hyphen is a semver prerelease (beta, rc, alpha…).
+          case "$V" in
+            *-*)
+              # 0.1.0-beta.1 -> "beta": the npm dist-tag users opt into.
+              TAG="${V#*-}"; TAG="${TAG%%.*}"
+              echo "prerelease=true"   >> "$GITHUB_OUTPUT"
+              echo "npm_tag=$TAG"      >> "$GITHUB_OUTPUT"
+              echo "Prerelease $V (npm dist-tag: $TAG)"
+              ;;
+            *)
+              echo "prerelease=false"  >> "$GITHUB_OUTPUT"
+              echo "npm_tag=latest"    >> "$GITHUB_OUTPUT"
+              echo "Stable release $V"
+              ;;
+          esac
 
   goreleaser:
     runs-on: ubuntu-latest
@@ -48,6 +67,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   docker:
+    needs: version
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -61,17 +81,29 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      # A prerelease must not move :latest — `docker run ghcr.io/…/pushq`
+      # has to keep pulling the newest stable image.
+      - id: tags
+        run: |
+          V="${{ needs.version.outputs.version }}"
+          REPO="ghcr.io/${{ github.repository }}"
+          {
+            echo "value<<TAGS"
+            echo "$REPO:$V"
+            if [ "${{ needs.version.outputs.prerelease }}" != "true" ]; then
+              echo "$REPO:latest"
+            fi
+            echo "TAGS"
+          } >> "$GITHUB_OUTPUT"
       - uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
           build-args: |
-            VERSION=${{ github.ref_name }}
+            VERSION=${{ needs.version.outputs.version }}
             COMMIT=${{ github.sha }}
-          tags: |
-            ghcr.io/${{ github.repository }}:latest
-            ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+          tags: ${{ steps.tags.outputs.value }}
 
   # --- SDKs ---
 
@@ -97,14 +129,23 @@ jobs:
       # Last gate before an immutable publish.
       - name: Validate package exports
         run: cd sdks/typescript && npm run check:exports
+      # --tag is what keeps a prerelease off `npm install pushq`. Without it a
+      # beta would silently become the default for every user.
       - name: Publish
         if: env.NPM_TOKEN != ''
-        run: cd sdks/typescript && npm publish --provenance --access public
+        run: |
+          cd sdks/typescript
+          npm publish --provenance --access public --tag "${{ needs.version.outputs.npm_tag }}"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   pypi:
     needs: version
+    # Trusted Publishing has no secret to detect, so opt in explicitly with a
+    # repository variable (Settings > Secrets and variables > Actions >
+    # Variables): PUBLISH_PYPI = true. Without it this job is skipped rather
+    # than failing the release.
+    if: vars.PUBLISH_PYPI == 'true'
     runs-on: ubuntu-latest
     environment: pypi # PyPI Trusted Publishing is scoped to this environment
     permissions:

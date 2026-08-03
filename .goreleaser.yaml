@@ -36,6 +36,9 @@ changelog:
 
 release:
   draft: true
+  # Tags like v0.1.0-beta.1 are flagged as prereleases on GitHub, so they
+  # don't show up as the project's "Latest release".
+  prerelease: auto
 
 # Uncomment once a homebrew tap repo exists:
 # brews:
