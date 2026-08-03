@@ -143,11 +143,9 @@ jobs:
 
   pypi:
     needs: version
-    # Trusted Publishing has no secret to detect, so opt in explicitly with a
-    # repository variable (Settings > Secrets and variables > Actions >
-    # Variables): PUBLISH_PYPI = true. Without it this job is skipped rather
-    # than failing the release.
-    if: vars.PUBLISH_PYPI == 'true'
+    # This job always runs and always builds + validates the distributions.
+    # Only the upload is gated, so the log says plainly whether it published
+    # and why not — a skipped job would just show empty output.
     runs-on: ubuntu-latest
     environment: pypi # PyPI Trusted Publishing is scoped to this environment
     permissions:
@@ -172,7 +170,26 @@ jobs:
           cd sdks/python
           twine check dist/*
           python -c "import glob,zipfile,sys; n=zipfile.ZipFile(glob.glob('dist/*.whl')[0]).namelist(); sys.exit(0 if 'pushq/py.typed' in n else 'py.typed missing from wheel')"
-      - uses: pypa/gh-action-pypi-publish@release/v1
+      # Opt in with a repository VARIABLE (not a secret):
+      # Settings > Secrets and variables > Actions > Variables tab >
+      # New repository variable: PUBLISH_PYPI = true
+      - id: gate
+        run: |
+          RAW='${{ vars.PUBLISH_PYPI }}'
+          VAL=$(echo "$RAW" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+          case "$VAL" in
+            true|1|yes|on) echo "publish=true" >> "$GITHUB_OUTPUT" ;;
+            *)
+              echo "publish=false" >> "$GITHUB_OUTPUT"
+              echo "::warning title=PyPI upload skipped::vars.PUBLISH_PYPI is '$RAW' (expected 'true'). Distributions were built and validated but not uploaded."
+              echo "Set the repository VARIABLE PUBLISH_PYPI=true under"
+              echo "  Settings > Secrets and variables > Actions > Variables"
+              echo "It must be a Variable, not a Secret — the vars context cannot read secrets."
+              ;;
+          esac
+
+      - if: steps.gate.outputs.publish == 'true'
+        uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: sdks/python/dist
           skip-existing: true

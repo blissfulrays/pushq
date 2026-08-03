@@ -74,6 +74,13 @@ proves the workflow's identity with a short-lived OIDC token.
 3. GitHub repo → Settings → **Environments** → New environment named `pypi`.
    (Optional but recommended: add yourself as a required reviewer, so a release
    pauses for approval before it reaches PyPI.)
+4. GitHub repo → Settings → Secrets and variables → Actions → **Variables** tab
+   → New repository variable: `PUBLISH_PYPI` = `true`.
+
+That last one is the opt-in switch. It must be a **Variable, not a Secret** —
+the `vars` context cannot read secrets, so a secret of that name is invisible
+to the workflow. Without it the job still builds and validates the
+distributions, then logs a warning explaining that it did not upload.
 
 "Pending publisher" is the right choice pre-first-release — it authorizes the
 project name before the project exists.
@@ -153,6 +160,20 @@ The dist-tag is derived from the version: `-beta.N` → `beta`, `-rc.N` → `rc`
 immutable, so a fix always means a new number.
 
 Promote to stable by tagging `v0.1.0` when you're happy.
+
+### Two first-time surprises
+
+**npm points `latest` at your first publish, even with `--tag beta`.** Every
+package must have a `latest`, so npm sets it when the package has no other
+versions. It self-corrects the moment you publish a stable version without
+`--tag`. Until then `npm install pushq` resolves to the beta — harmless when
+no stable exists, since there's nothing else to install. To repoint it by hand
+later: `npm dist-tag add pushq@0.1.0 latest`.
+
+**GHCR packages are private by default.** The first push creates the package
+private, so `docker pull ghcr.io/blissfulrays/pushq` fails anonymously until
+you open the package's settings on GitHub and change its visibility to public
+(and, while there, link it to the repository).
 
 ## Releasing
 
