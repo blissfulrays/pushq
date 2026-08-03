@@ -8,7 +8,7 @@ which stamps that version into every SDK and pushes to each registry:
 | Binaries | GitHub Releases | none (built-in token) | — |
 | Docker | ghcr.io | none (built-in token) | — |
 | TypeScript | npm | `NPM_TOKEN` secret | yes |
-| Python | PyPI | Trusted Publishing + repo variable `PUBLISH_PYPI=true` | yes |
+| Python | PyPI | Trusted Publishing (no secret) | no — fails loudly |
 | Java | Maven Central | 4 secrets (see below) | yes |
 | Go | none — just a git tag | none | — |
 
@@ -72,15 +72,12 @@ proves the workflow's identity with a short-lived OIDC token.
    - Workflow name: `release.yml`
    - Environment name: `pypi`
 3. GitHub repo → Settings → **Environments** → New environment named `pypi`.
-   (Optional but recommended: add yourself as a required reviewer, so a release
-   pauses for approval before it reaches PyPI.)
-4. GitHub repo → Settings → Secrets and variables → Actions → **Variables** tab
-   → New repository variable: `PUBLISH_PYPI` = `true`.
+   The name must match the publisher exactly — it is part of the identity PyPI
+   verifies. (Optional: add yourself as a required reviewer so a release pauses
+   for approval before it reaches PyPI.)
 
-That last one is the opt-in switch. It must be a **Variable, not a Secret** —
-the `vars` context cannot read secrets, so a secret of that name is invisible
-to the workflow. Without it the job still builds and validates the
-distributions, then logs a warning explaining that it did not upload.
+There is no token and no opt-in flag; once the publisher and environment exist,
+the release publishes.
 
 "Pending publisher" is the right choice pre-first-release — it authorizes the
 project name before the project exists.

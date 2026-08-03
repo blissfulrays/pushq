@@ -170,29 +170,16 @@ jobs:
           cd sdks/python
           twine check dist/*
           python -c "import glob,zipfile,sys; n=zipfile.ZipFile(glob.glob('dist/*.whl')[0]).namelist(); sys.exit(0 if 'pushq/py.typed' in n else 'py.typed missing from wheel')"
-      # Opt in with a repository VARIABLE (not a secret):
-      # Settings > Secrets and variables > Actions > Variables tab >
-      # New repository variable: PUBLISH_PYPI = true
-      - id: gate
-        run: |
-          RAW='${{ vars.PUBLISH_PYPI }}'
-          VAL=$(echo "$RAW" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
-          case "$VAL" in
-            true|1|yes|on) echo "publish=true" >> "$GITHUB_OUTPUT" ;;
-            *)
-              echo "publish=false" >> "$GITHUB_OUTPUT"
-              echo "::warning title=PyPI upload skipped::vars.PUBLISH_PYPI is '$RAW' (expected 'true'). Distributions were built and validated but not uploaded."
-              echo "Set the repository VARIABLE PUBLISH_PYPI=true under"
-              echo "  Settings > Secrets and variables > Actions > Variables"
-              echo "It must be a Variable, not a Secret — the vars context cannot read secrets."
-              ;;
-          esac
-
-      - if: steps.gate.outputs.publish == 'true'
-        uses: pypa/gh-action-pypi-publish@release/v1
+      # Publishes unconditionally via Trusted Publishing. If the OIDC identity
+      # doesn't match the publisher registered on PyPI this fails loudly, which
+      # is what you want — a silent skip looks identical to a successful
+      # release that quietly shipped nothing.
+      # skip-existing keeps re-runs safe when a version already uploaded.
+      - uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: sdks/python/dist
           skip-existing: true
+          print-hash: true
 
   maven:
     needs: version
