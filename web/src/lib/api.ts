@@ -1,4 +1,4 @@
-import { auth } from '$lib/auth.svelte';
+import { auth, type Role, type User } from '$lib/auth.svelte';
 
 /** RFC 9457 problem+json body. */
 export interface Problem {
@@ -149,6 +149,9 @@ function qs(params: Record<string, string | number | undefined>): string {
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 	const headers = new Headers(init.headers);
 	headers.set('Accept', 'application/json, application/problem+json');
+	// Required by the server for cookie-authenticated writes (CSRF guard).
+	headers.set('X-Requested-With', 'pushq');
+	if (init.body !== undefined) headers.set('Content-Type', 'application/json');
 	if (auth.key) headers.set('Authorization', `Bearer ${auth.key}`);
 	const res = await fetch(`${window.location.origin}${path}`, { ...init, headers });
 	let data: unknown;
@@ -161,13 +164,75 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 		}
 	}
 	if (!res.ok) {
-		if (res.status === 401) auth.requireKey();
+		if (res.status === 401 && !path.startsWith('/v1/auth/')) auth.onUnauthorized();
 		throw new ApiError(res.status, (data ?? {}) as Problem);
 	}
 	return data as T;
 }
 
 const enc = encodeURIComponent;
+
+const json = (method: string, body?: unknown): RequestInit => ({
+	method,
+	body: body === undefined ? undefined : JSON.stringify(body)
+});
+
+export type KeyRole = 'admin' | 'writer';
+
+export interface Invite {
+	id: number;
+	kind: 'invite' | 'reset';
+	email: string;
+	role?: Role;
+	created_at: string;
+	expires_at: string;
+}
+
+export interface ApiKey {
+	id: number;
+	name: string;
+	prefix: string;
+	role: KeyRole;
+	created_by?: string;
+	created_at: string;
+	last_used_at?: string;
+}
+
+/** Turns a server-relative "/ui/invite#token=…" path into a full link. */
+export function absoluteLink(path: string): string {
+	return `${window.location.origin}${path}`;
+}
+
+export const accountsApi = {
+	setup: (body: { email: string; name: string; password: string; api_key?: string }) =>
+		request<{ user: User }>('/v1/auth/setup', json('POST', body)),
+	login: (email: string, password: string) =>
+		request<{ user: User }>('/v1/auth/login', json('POST', { email, password })),
+	getInvite: (token: string) => request<Invite>(`/v1/auth/invites/${enc(token)}`),
+	acceptInvite: (token: string, name: string, password: string) =>
+		request<{ user: User }>(`/v1/auth/invites/${enc(token)}:accept`, json('POST', { name, password })),
+
+	updateMe: (name: string) => request<User>('/v1/me', json('PATCH', { name })),
+	changePassword: (current_password: string, new_password: string) =>
+		request<void>('/v1/me/password', json('POST', { current_password, new_password })),
+
+	listUsers: () => request<{ users: User[] }>('/v1/users'),
+	updateUser: (id: number, patch: { role?: Role; name?: string }) =>
+		request<User>(`/v1/users/${id}`, json('PATCH', patch)),
+	deleteUser: (id: number) => request<void>(`/v1/users/${id}`, { method: 'DELETE' }),
+	resetLink: (id: number) =>
+		request<{ link: Invite; path: string }>(`/v1/users/${id}/reset-link`, { method: 'POST' }),
+
+	listInvites: () => request<{ invites: Invite[] }>('/v1/invites'),
+	createInvite: (email: string, role: Role) =>
+		request<{ invite: Invite; path: string }>('/v1/invites', json('POST', { email, role })),
+	deleteInvite: (id: number) => request<void>(`/v1/invites/${id}`, { method: 'DELETE' }),
+
+	listKeys: () => request<{ keys: ApiKey[]; config_keys: number }>('/v1/api-keys'),
+	createKey: (name: string, role: KeyRole) =>
+		request<{ key: ApiKey; secret: string }>('/v1/api-keys', json('POST', { name, role })),
+	deleteKey: (id: number) => request<void>(`/v1/api-keys/${id}`, { method: 'DELETE' })
+};
 
 export const api = {
 	listQueues: (opts: { namePrefix?: string; pageSize?: number; pageToken?: string } = {}) =>

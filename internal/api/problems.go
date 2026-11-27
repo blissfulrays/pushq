@@ -17,6 +17,7 @@ const (
 	CodeUnauthenticated    = "unauthenticated"
 	CodePermissionDenied   = "permission_denied"
 	CodePayloadTooLarge    = "payload_too_large"
+	CodeRateLimited        = "rate_limited"
 	CodeInternal           = "internal"
 )
 

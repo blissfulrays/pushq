@@ -9,7 +9,7 @@ migration is mostly mechanical renaming. This guide maps every
 
 | Cloud Tasks | pushq |
 |---|---|
-| Project / location / queue path | Flat queue name (`[a-z0-9-]`, ≤100 chars) |
+| Project / location / queue path | Queue name (`[a-z0-9-]` segments joined by `/` for folders, e.g. `billing/invoices`; ≤200 chars) |
 | `CreateQueue` / `UpdateQueue` | `PUT /v1/queues/{queue}` — one idempotent upsert, cheap to call on every enqueue |
 | `queue.rateLimits.maxDispatchesPerSecond` | `rate_limits.max_dispatches_per_second` |
 | `queue.rateLimits.maxBurstSize` | `rate_limits.max_burst_size` (0 = auto, like GCP) |

@@ -4,8 +4,6 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/go-chi/chi/v5"
-
 	"github.com/blissfulrays/pushq/internal/api/types"
 	"github.com/blissfulrays/pushq/internal/store"
 )
@@ -13,7 +11,7 @@ import (
 const maxBatchTasks = 500
 
 func (s *Server) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
-	queue := chi.URLParam(r, "queue")
+	queue := queueParam(r)
 	var body types.TaskCreate
 	// Body limit: task body is base64 (4/3 overhead) plus envelope.
 	if err := s.decodeJSON(w, r, &body, s.Limits.MaxBodyBytes*2+(64<<10)); err != nil {
@@ -40,7 +38,7 @@ func (s *Server) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleTaskBatch(w http.ResponseWriter, r *http.Request) {
-	queue := chi.URLParam(r, "queue")
+	queue := queueParam(r)
 	var body types.TaskBatchCreate
 	if err := s.decodeJSON(w, r, &body, 8<<20); err != nil {
 		s.writeErr(w, r, err)
@@ -67,7 +65,7 @@ func (s *Server) handleTaskBatch(w http.ResponseWriter, r *http.Request) {
 	for i, dto := range body.Tasks {
 		nt, err := taskCreateToNewTask(queue, dto, s.Limits, q.Target.BaseURL != "", now)
 		if err != nil {
-			results[i] = types.BatchResult{Index: i, Error: batchError(err)}
+			results[i] = types.BatchResult{Index: i, Error: s.batchError(r, err)}
 			continue
 		}
 		newTasks = append(newTasks, nt)
@@ -83,7 +81,7 @@ func (s *Server) handleTaskBatch(w http.ResponseWriter, r *http.Request) {
 		for j, res := range created {
 			i := newIdx[j]
 			if res.Err != nil {
-				results[i] = types.BatchResult{Index: i, Error: batchError(res.Err)}
+				results[i] = types.BatchResult{Index: i, Error: s.batchError(r, res.Err)}
 			} else {
 				t := taskToResponse(res.Task)
 				results[i] = types.BatchResult{Index: i, Task: &t}
@@ -93,7 +91,7 @@ func (s *Server) handleTaskBatch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, types.BatchResponse{Results: results})
 }
 
-func batchError(err error) *types.BatchError {
+func (s *Server) batchError(r *http.Request, err error) *types.BatchError {
 	code := CodeInternal
 	switch {
 	case isBadRequest(err):
@@ -105,6 +103,11 @@ func batchError(err error) *types.BatchError {
 	case isStoreErr(err, store.ErrFailedPrecondition):
 		code = CodeFailedPrecondition
 	}
+	if code == CodeInternal {
+		// Don't leak driver/SQL error text to clients; log it instead.
+		s.Log.Error("batch item failed", "path", r.URL.Path, "err", err)
+		return &types.BatchError{Code: code, Detail: "internal error"}
+	}
 	return &types.BatchError{Code: code, Detail: err.Error()}
 }
 
@@ -113,7 +116,7 @@ func (s *Server) handleTaskGet(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("view") == "full" {
 		view = store.ViewFull
 	}
-	t, err := s.Store.GetTask(r.Context(), chi.URLParam(r, "queue"), chi.URLParam(r, "taskID"), view)
+	t, err := s.Store.GetTask(r.Context(), queueParam(r), taskParam(r), view)
 	if err != nil {
 		s.writeErr(w, r, err)
 		return
@@ -124,7 +127,7 @@ func (s *Server) handleTaskGet(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleTaskList(w http.ResponseWriter, r *http.Request) {
 	qp := r.URL.Query()
 	opts := store.ListTasksOpts{
-		Queue:     chi.URLParam(r, "queue"),
+		Queue:     queueParam(r),
 		IDPrefix:  qp.Get("id_prefix"),
 		PageToken: qp.Get("page_token"),
 		View:      store.ViewBasic,
@@ -163,7 +166,7 @@ func (s *Server) handleTaskList(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleTaskDelete(w http.ResponseWriter, r *http.Request) {
-	err := s.Store.DeleteTask(r.Context(), chi.URLParam(r, "queue"), chi.URLParam(r, "taskID"), s.Now())
+	err := s.Store.DeleteTask(r.Context(), queueParam(r), taskParam(r), s.Now())
 	if err != nil {
 		s.writeErr(w, r, err)
 		return
@@ -172,7 +175,7 @@ func (s *Server) handleTaskDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleTaskRun(w http.ResponseWriter, r *http.Request) {
-	t, err := s.Store.ForceRun(r.Context(), chi.URLParam(r, "queue"), chi.URLParam(r, "taskID"), s.Now())
+	t, err := s.Store.ForceRun(r.Context(), queueParam(r), taskParam(r), s.Now())
 	if err != nil {
 		s.writeErr(w, r, err)
 		return
@@ -181,7 +184,7 @@ func (s *Server) handleTaskRun(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAttemptsList(w http.ResponseWriter, r *http.Request) {
-	attempts, err := s.Store.ListAttempts(r.Context(), chi.URLParam(r, "queue"), chi.URLParam(r, "taskID"))
+	attempts, err := s.Store.ListAttempts(r.Context(), queueParam(r), taskParam(r))
 	if err != nil {
 		s.writeErr(w, r, err)
 		return

@@ -42,7 +42,7 @@ Try it:
   curl -X POST localhost%[1]s/v1/queues/demo/tasks -d '{"url":"https://httpbin.org/post","json_body":{"hello":"world"}}'
 
 `, cfg.Listen, cfg.Listen, cfg.Listen, cfg.DB)
-			return runServe(cmd.Context(), cfg)
+			return runServe(cmd.Context(), cfg, true)
 		},
 	}
 	cmd.Flags().StringVar(&listen, "listen", ":8080", "listen address")

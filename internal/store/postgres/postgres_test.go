@@ -29,7 +29,7 @@ func newStore(t *testing.T) store.Store {
 	t.Cleanup(func() { s.Close() })
 	ctx := context.Background()
 	if _, err := s.db.ExecContext(ctx,
-		`DROP TABLE IF EXISTS task_attempts, tasks, queues, schema_migrations CASCADE`); err != nil {
+		`DROP TABLE IF EXISTS api_keys, invites, sessions, users, task_attempts, tasks, queues, schema_migrations CASCADE`); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Migrate(ctx); err != nil {

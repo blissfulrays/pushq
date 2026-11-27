@@ -14,6 +14,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/blissfulrays/pushq/internal/accounts"
 	"github.com/blissfulrays/pushq/internal/api"
 	"github.com/blissfulrays/pushq/internal/auth"
 	"github.com/blissfulrays/pushq/internal/config"
@@ -47,7 +48,7 @@ func serveCmd() *cobra.Command {
 			if err := cfg.Validate(); err != nil {
 				return err
 			}
-			return runServe(cmd.Context(), cfg)
+			return runServe(cmd.Context(), cfg, false)
 		},
 	}
 	cmd.Flags().StringVarP(&cfgPath, "config", "c", "", "path to YAML config file")
@@ -87,7 +88,8 @@ func openStore(cfg config.Config) (store.Store, error) {
 	}
 }
 
-func runServe(ctx context.Context, cfg config.Config) error {
+// runServe runs the server. dev disables authentication entirely.
+func runServe(ctx context.Context, cfg config.Config, dev bool) error {
 	logger := newLogger(cfg.Log)
 
 	st, err := openStore(cfg)
@@ -107,22 +109,30 @@ func runServe(ctx context.Context, cfg config.Config) error {
 		leader = pg.NewElector()
 	}
 	disp := dispatch.New(st, dispatch.Options{
-		GlobalConcurrency: cfg.Dispatcher.GlobalConcurrency,
-		PerQueueClaimCap:  cfg.Dispatcher.PerQueueClaimCap,
-		ReconcileInterval: cfg.Dispatcher.ReconcileInterval,
-		SweepInterval:     cfg.Dispatcher.SweepInterval,
-		CleanupInterval:   cfg.Dispatcher.CleanupInterval,
-		LeaseGrace:        cfg.Dispatcher.LeaseGrace,
-		DrainTimeout:      cfg.Dispatcher.DrainTimeout,
+		GlobalConcurrency:  cfg.Dispatcher.GlobalConcurrency,
+		PerQueueClaimCap:   cfg.Dispatcher.PerQueueClaimCap,
+		ReconcileInterval:  cfg.Dispatcher.ReconcileInterval,
+		SweepInterval:      cfg.Dispatcher.SweepInterval,
+		CleanupInterval:    cfg.Dispatcher.CleanupInterval,
+		LeaseGrace:         cfg.Dispatcher.LeaseGrace,
+		DrainTimeout:       cfg.Dispatcher.DrainTimeout,
 		RetentionSucceeded: cfg.Retention.Succeeded,
 		RetentionFailed:    cfg.Retention.Failed,
 		DedupWindow:        cfg.Limits.DedupWindow,
 		Leader:             leader,
 	}, logger, reg)
 
+	var acc *accounts.Store
+	if sb, ok := st.(store.SQLBacked); ok {
+		w, r := sb.SQLHandles()
+		acc = accounts.New(w, r, st.Dialect())
+	}
+	authn := auth.New(cfg.APIKeys, acc, dev)
+
 	srv := &api.Server{
 		Store:          st,
-		Auth:           auth.New(cfg.APIKeys),
+		Auth:           authn,
+		Accounts:       acc,
 		Log:            logger,
 		Limits:         cfg.Limits,
 		MetricsPublic:  cfg.Metrics.Public,
@@ -130,8 +140,15 @@ func runServe(ctx context.Context, cfg config.Config) error {
 		Now:            time.Now,
 		Role:           disp.Role,
 	}
-	if srv.Auth.Open() {
-		logger.Warn("no API keys configured — the API is UNAUTHENTICATED; set api_keys in config or PUSHQ_API_KEYS")
+	switch open, err := authn.IsOpen(ctx); {
+	case err != nil:
+		return fmt.Errorf("check accounts: %w", err)
+	case dev:
+		logger.Warn("dev mode: authentication is disabled")
+	case open:
+		logger.Warn("no API keys and no dashboard accounts yet — the API is UNAUTHENTICATED. " +
+			"Open the dashboard at /ui/ to create the first admin account (this locks the API), " +
+			"or set api_keys in config / PUSHQ_API_KEYS")
 	}
 
 	httpSrv := &http.Server{

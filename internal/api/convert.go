@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/url"
 	"regexp"
 	"strings"
@@ -11,11 +12,16 @@ import (
 
 	"github.com/blissfulrays/pushq/internal/api/types"
 	"github.com/blissfulrays/pushq/internal/config"
+	"github.com/blissfulrays/pushq/internal/httpheader"
 	"github.com/blissfulrays/pushq/internal/store"
 )
 
 var (
-	queueNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,99}$`)
+	// A queue name is one or more '/'-separated segments; every segment but
+	// the last is a folder ("user/instagram" is queue "instagram" in folder
+	// "user"). Folders are purely a naming convention — they have no config
+	// of their own and exist as long as some queue name uses them.
+	queueNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*(/[a-z0-9][a-z0-9-]*)*$`)
 	taskIDRe    = regexp.MustCompile(`^[A-Za-z0-9_-]{1,500}$`)
 )
 
@@ -38,9 +44,12 @@ func (e badRequest) Error() string { return e.msg }
 
 func errf(format string, args ...any) error { return badRequest{fmt.Sprintf(format, args...)} }
 
+const maxQueueNameLen = 200
+
 func validQueueName(name string) error {
-	if !queueNameRe.MatchString(name) {
-		return errf("queue name must match [a-z0-9][a-z0-9-]{0,99}, got %q", name)
+	if len(name) > maxQueueNameLen || !queueNameRe.MatchString(name) {
+		return errf("queue name must be 1-%d chars of '/'-separated segments, each matching [a-z0-9][a-z0-9-]* (e.g. \"user/instagram\"), got %q",
+			maxQueueNameLen, name)
 	}
 	return nil
 }
@@ -52,7 +61,22 @@ func validTaskID(id string) error {
 	return nil
 }
 
+// maxSeconds is the largest number of seconds a time.Duration can hold.
+const maxSeconds = float64(math.MaxInt64) / float64(time.Second)
+
+// maxDelaySeconds caps delay_seconds at 100 years.
+const maxDelaySeconds = 100 * 365 * 24 * 3600
+
+// secondsToDuration converts API seconds to a Duration, saturating instead of
+// overflowing (an out-of-range float-to-int conversion would wrap to a
+// negative value and slip past "too far ahead" checks).
 func secondsToDuration(s float64) time.Duration {
+	switch {
+	case s >= maxSeconds:
+		return time.Duration(math.MaxInt64)
+	case s <= -maxSeconds:
+		return time.Duration(math.MinInt64)
+	}
 	return time.Duration(s * float64(time.Second))
 }
 
@@ -65,6 +89,12 @@ func validateHeaders(h map[string]string, maxBytes int64) error {
 	for k, v := range h {
 		if k == "" {
 			return errf("empty header name")
+		}
+		if !httpheader.ValidName(k) {
+			return errf("invalid header name %q", k)
+		}
+		if !httpheader.ValidValue(v) {
+			return errf("header %q has an invalid value (control characters such as CR, LF or NUL are not allowed)", k)
 		}
 		if reservedHeaders[strings.ToLower(k)] {
 			return errf("header %q is reserved", k)
@@ -400,6 +430,11 @@ func taskCreateToNewTask(queue string, dto types.TaskCreate, limits config.Limit
 	case dto.DelaySeconds != nil:
 		if *dto.DelaySeconds < 0 {
 			return t, errf("delay_seconds must be >= 0")
+		}
+		// Hard ceiling even when max_schedule_ahead is unlimited: far-future
+		// times overflow the stores' millisecond/microsecond timestamps.
+		if *dto.DelaySeconds > maxDelaySeconds {
+			return t, errf("delay_seconds must be <= %.0f", float64(maxDelaySeconds))
 		}
 		t.ScheduleTime = now.Add(secondsToDuration(*dto.DelaySeconds))
 	default:

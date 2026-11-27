@@ -84,6 +84,10 @@ func (s *Store) Close() error {
 
 func (s *Store) Dialect() string { return "postgres" }
 
+// SQLHandles exposes the pool to packages layered on the same database
+// (accounts).
+func (s *Store) SQLHandles() (write, read *sql.DB) { return s.db, s.db }
+
 // DB exposes the underlying pool (used by tests).
 func (s *Store) DB() *sql.DB { return s.db }
 

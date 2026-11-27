@@ -316,6 +316,11 @@ func (s *Store) PatchQueue(ctx context.Context, name string, p store.QueuePatch,
 		u.DeadLetterQueue = *p.DeadLetterQueue
 	}
 
+	if p.Validate != nil {
+		if err := p.Validate(u); err != nil {
+			return store.Queue{}, err
+		}
+	}
 	if sameConfig(q, u) && state == q.State {
 		return q, nil
 	}
@@ -433,8 +438,14 @@ func (s *Store) PurgeQueue(ctx context.Context, name string, now time.Time) (sto
 		return store.Queue{}, err
 	}
 	defer tx.Rollback()
+	// The watermark covers every task that exists now, even ones stamped by
+	// a replica whose clock runs ahead of this one; CreateTasks in turn
+	// stamps later tasks strictly after it (see queueRef.createdAt).
 	res, err := tx.ExecContext(ctx,
-		`UPDATE queues SET purged_at=$1, config_version=config_version+1, updated_at=$1 WHERE name=$2`,
+		`UPDATE queues SET
+			purged_at = GREATEST($1, (SELECT max(t.created_at) FROM tasks t WHERE t.queue_id = queues.id)),
+			config_version=config_version+1, updated_at=$1
+		WHERE name=$2`,
 		now.UTC(), name)
 	if err != nil {
 		return store.Queue{}, err

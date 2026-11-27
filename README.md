@@ -96,7 +96,9 @@ limits:
 retention: { succeeded: 24h, failed: 168h }
 ```
 
-No `api_keys` = unauthenticated (dev only; the server warns loudly).
+Config-file `api_keys` are optional: you can also create keys in the dashboard
+(see below). A server with no config keys and no dashboard accounts yet is
+unauthenticated until you complete first-time setup (the server warns loudly).
 
 ## How delivery works
 
@@ -129,10 +131,55 @@ Every SDK ships the client **and** a constant-time `verify_signature` helper
 for receivers. The REST API is fully described in
 [api/openapi.yaml](api/openapi.yaml).
 
+## Queue folders
+
+Queue names may contain `/` to arrange queues in folders: creating
+`user/instagram` puts an `instagram` queue in a `user` folder (folders nest,
+e.g. `user/tiktok/eu`). Each queue is still fully independent — folders are
+just part of the name and need no setup. Segments match `[a-z0-9][a-z0-9-]*`,
+up to 200 chars in total.
+
+In API paths the whole name is one URL-encoded segment — every SDK and the
+CLI do this for you:
+
+```bash
+curl -X PUT  localhost:8080/v1/queues/user%2Finstagram -d '{"target":{"base_url":"https://api.example.com"}}'
+curl -X POST localhost:8080/v1/queues/user%2Finstagram/tasks -d '{"path":"/hooks/post"}'
+curl 'localhost:8080/v1/queues?name_prefix=user/'   # everything in the folder
+```
+
 ## Dashboard
 
-The binary embeds a minimal dashboard at `/ui/` — queues with live stats,
-pause/resume/purge, task browsing with attempt history, force-run.
+The binary embeds a dashboard at `/ui/` — queues browsable by folder with live
+stats, pause/resume/purge, task browsing with attempt history, force-run.
+
+### Sign-in and team
+
+- **First launch:** opening `/ui/` on a new server asks you to create the
+  admin account. From then on the API needs a login session or an API key.
+  If the server already has `api_keys` in its config, setup also asks for one
+  of its admin keys, so a protected server can't be claimed by whoever reaches
+  the dashboard first.
+- **Team:** admins invite people under *Settings → Team*. pushq doesn't send
+  email: you get a one-time link (valid 7 days) to send yourself. Roles:
+
+  | Role | Can |
+  |---|---|
+  | Admin | everything, including team members and API keys |
+  | Member | create, pause, purge and delete queues; enqueue, run and delete tasks |
+  | Viewer | read-only |
+
+- **API keys:** admins create and revoke keys for apps under *Settings → API
+  keys*. Keys are shown once and stored only as hashes. *Writer* keys work with
+  queues they know by name; *admin* keys can do everything.
+- **Forgot your password?** An admin can make a reset link from the Team page.
+  If you're the only admin, run this on the server:
+
+  ```bash
+  pushq users reset-password you@example.com -c pushq.yaml --url https://pushq.example.com
+  ```
+
+`pushq dev` keeps authentication off entirely.
 
 ## Operations
 

@@ -5,6 +5,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"time"
 )
@@ -73,6 +74,12 @@ type Store interface {
 	CleanupTerminal(ctx context.Context, now time.Time, succeededTTL, failedTTL, dedupWindow time.Duration, limit int) (int64, error)
 	// HardDeletePurged removes pending tasks superseded by a purge watermark.
 	HardDeletePurged(ctx context.Context, limit int) (int64, error)
+}
+
+// SQLBacked is implemented by stores built on database/sql, letting other
+// packages (accounts) share the database and its migrations.
+type SQLBacked interface {
+	SQLHandles() (write, read *sql.DB)
 }
 
 type TaskResult struct {

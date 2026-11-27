@@ -320,7 +320,11 @@ components:
       name: queue
       in: path
       required: true
-      schema: { type: string, pattern: '^[a-z0-9][a-z0-9-]{0,99}$' }
+      description: >-
+        Queue name. Names may contain '/' to arrange queues in folders
+        ("user/instagram" is queue "instagram" in folder "user"); in the path
+        the whole name is one percent-encoded segment (user%2Finstagram).
+      schema: { type: string, maxLength: 200, pattern: '^[a-z0-9][a-z0-9-]*(/[a-z0-9][a-z0-9-]*)*$' }
     task_id:
       name: task_id
       in: path
@@ -421,7 +425,11 @@ components:
         - type: object
           required: [name]
           properties:
-            name: { type: string, pattern: '^[a-z0-9][a-z0-9-]{0,99}$' }
+            name:
+              type: string
+              maxLength: 200
+              pattern: '^[a-z0-9][a-z0-9-]*(/[a-z0-9][a-z0-9-]*)*$'
+              description: "'/'-separated segments; all but the last are folders, e.g. user/instagram."
         - { $ref: '#/components/schemas/QueuePut' }
 
     QueuePatch:

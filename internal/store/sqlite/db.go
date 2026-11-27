@@ -104,6 +104,10 @@ func (s *Store) Close() error {
 
 func (s *Store) Dialect() string { return "sqlite" }
 
+// SQLHandles exposes the write connection and read pool to packages layered
+// on the same database (accounts).
+func (s *Store) SQLHandles() (write, read *sql.DB) { return s.write, s.read }
+
 func (s *Store) Events() <-chan store.Event { return s.events }
 
 // emit is a best-effort non-blocking send; the dispatcher reconcile loop
