@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- CI runs on net10.0; override with -p:PushqTestTargetFramework=... locally. -->
+    <PushqTestTargetFramework Condition="'$(PushqTestTargetFramework)' == ''">net10.0</PushqTestTargetFramework>
+    <TargetFramework>$(PushqTestTargetFramework)</TargetFramework>
+    <LangVersion>10.0</LangVersion>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.10.0" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/Pushq/Pushq.csproj" />
+  </ItemGroup>
+
+</Project>

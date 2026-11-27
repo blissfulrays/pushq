@@ -2,7 +2,7 @@
 
 Releases are automatic. When a change lands on `main` and CI passes there,
 `.github/workflows/release.yml` tags the next version and publishes it
-everywhere: binaries, the Docker image, and all four SDKs.
+everywhere: binaries, the Docker image, and all five SDKs.
 
 ## How versions are picked
 
@@ -33,9 +33,10 @@ failed CI run on `main` never releases.
 | TypeScript | npm | Trusted Publishing (or `NPM_TOKEN` fallback) | no — fails loudly |
 | Python | PyPI | Trusted Publishing (no secret) | no — fails loudly |
 | Java | Maven Central | 4 secrets (see below) | yes |
+| C# / .NET | NuGet | Trusted Publishing + `NUGET_USER` secret | yes |
 | Go | none — just a git tag | none | — |
 
-Maven skips itself until its secrets exist. npm and PyPI always try to
+Maven and NuGet skip themselves until their secrets exist. npm and PyPI always try to
 publish and fail loudly when their trusted publisher isn't set up: a silent
 skip would look exactly like a release that quietly shipped nothing.
 
@@ -160,6 +161,30 @@ gpg --armor --export-secret-keys <KEY_ID>
 The POM keeps all of this in a `release` profile, so day-to-day `mvn package`
 never needs a GPG key.
 
+### NuGet (C# / .NET SDK)
+
+NuGet also uses **Trusted Publishing**: the official `NuGet/login` action
+exchanges GitHub's OIDC token for an API key that lives for an hour, so no
+long-lived key is stored anywhere.
+
+1. Sign in at nuget.org (create an account if needed; enable 2FA).
+2. Account menu → **Trusted Publishing** → *Create*:
+   - Repository Owner: `blissfulrays`
+   - Repository: `pushq`
+   - Workflow File: `release.yml`
+   - Environment: leave empty
+   - Package owner: your account
+3. GitHub repo → Settings → Secrets and variables → Actions → new secret
+   `NUGET_USER` = your **nuget.org profile name** (not your email). It is how
+   `NuGet/login` knows which account's policy to use.
+
+The package ID `Pushq` was unclaimed when the SDK was added; the first
+publish claims it for the account above. Packages are signed by nuget.org and
+ship a `.snupkg` with symbols and SourceLink, so debuggers step into the SDK
+source.
+
+Until `NUGET_USER` exists the job skips itself with a notice.
+
 ### Go SDK
 
 Nothing to publish and no account to create. Go modules are fetched straight
@@ -186,6 +211,7 @@ git push origin v0.1.0-beta.1
 | npm | `0.1.0-beta.1` under dist-tag `beta` | `npm install pushq@beta` | no — `latest` unmoved |
 | PyPI | `0.1.0b1` (PEP 440 normalizes it) | `pip install --pre pushq` | no — pip skips prereleases |
 | Maven Central | `0.1.0-beta.1` | pin the version | no |
+| NuGet | `0.1.0-beta.1` (SemVer 2 prerelease) | `dotnet add package Pushq --prerelease` | no — prereleases need opting in |
 | Go | tag `sdks/go/v0.1.0-beta.1` | `go get …/sdks/go@v0.1.0-beta.1` | no — `@latest` skips prereleases |
 | Docker | `:0.1.0-beta.1` only | pin the tag | no — `:latest` unmoved |
 | GitHub | release marked "Pre-release" | — | not shown as Latest |
@@ -239,6 +265,7 @@ tag.
 npm view pushq version
 pip download pushq==0.1.0 -d /tmp/x --no-deps
 go list -m github.com/blissfulrays/pushq/sdks/go@v0.1.0
+curl -s https://api.nuget.org/v3-flatcontainer/pushq/index.json   # NuGet: lists published versions
 # Maven Central: search central.sonatype.com; expect 10–30 min before it's
 # searchable, though direct coordinate resolution works sooner.
 ```

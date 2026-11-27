@@ -40,6 +40,10 @@ sdk-test-py: build-go
 sdk-test-go:
 	cd sdks/go && $(GO) vet ./... && $(GO) test ./...
 
+.PHONY: sdk-test-dotnet
+sdk-test-dotnet: build-go
+	cd sdks/dotnet && PUSHQ_BIN=$(CURDIR)/pushq dotnet test tests/Pushq.Tests
+
 .PHONY: sdk-test-java
 sdk-test-java:
 	cd sdks/java && mvn -q package

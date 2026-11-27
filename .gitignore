@@ -10,6 +10,8 @@ sdks/python/.venv/
 sdks/python/dist/
 sdks/typescript/dist/
 sdks/java/target/
+sdks/dotnet/**/bin/
+sdks/dotnet/**/obj/
 coverage.out
 
 # transient artifact from the CI type-visibility check

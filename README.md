@@ -126,6 +126,7 @@ be idempotent; the `webhook-id` is your idempotency key.
 | Python | `pip install pushq` | [docs](sdks/python/README.md) |
 | Go | `go get github.com/blissfulrays/pushq/sdks/go` | [docs](sdks/go/README.md) |
 | Java | `io.github.blissfulrays:pushq` | [docs](sdks/java/README.md) |
+| C# / .NET | `dotnet add package Pushq` | [docs](sdks/dotnet/README.md) |
 
 Every SDK ships the client **and** a constant-time `verify_signature` helper
 for receivers. The REST API is fully described in
@@ -202,7 +203,7 @@ make test-pg     # + Postgres conformance and blue/green tests (needs PUSHQ_TEST
 make build       # binary with embedded dashboard
 ```
 
-Cutting a release (binaries, Docker image, and all four SDKs from one tag):
+Releases (binaries, Docker image, and all five SDKs) are cut automatically on merge to `main`:
 [docs/publishing.md](docs/publishing.md).
 
 MIT licensed.
