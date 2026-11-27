@@ -1,8 +1,8 @@
 name: release
 
 # Publishes everything at one version: binaries, the Docker image, and all
-# four SDKs. Each SDK job no-ops until its credentials exist, so you can enable
-# registries one at a time. See docs/publishing.md.
+# four SDKs. npm and PyPI use Trusted Publishing; Maven skips itself until its
+# secrets exist. See docs/publishing.md.
 #
 # Three ways in:
 #   - Merge to main (automatic): once CI passes on main, the next version is
@@ -62,7 +62,6 @@ jobs:
         run: |
           set -euo pipefail
           SHA=$(git rev-parse HEAD)
-          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
           skip() {
             echo "release=false" >> "$GITHUB_OUTPUT"
             echo "::notice title=No release::$1"
@@ -70,7 +69,15 @@ jobs:
           }
 
           case "$EVENT" in
-            workflow_dispatch) V="${INPUT_VERSION#v}" ;;
+            workflow_dispatch)
+              V="${INPUT_VERSION#v}"
+              # Re-running a version that already exists republishes it from
+              # its own commit; registries that already have it are skipped.
+              if git rev-parse -q --verify "refs/tags/v$V" >/dev/null; then
+                SHA=$(git rev-list -n1 "v$V")
+                echo "::notice title=Re-running v$V::building from its tagged commit $SHA"
+              fi
+              ;;
             push)              V="${GITHUB_REF_NAME#v}" ;;   # tag v0.1.0 -> 0.1.0
             workflow_run)
               if printf '%s' "$HEAD_MSG" | grep -qiE '\[(skip release|release skip|no release)\]'; then
@@ -132,6 +139,7 @@ jobs:
             git tag -a "$TAG" -m "Release $TAG"
             git push origin "$TAG"
           fi
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
           echo "release=true" >> "$GITHUB_OUTPUT"
           echo "::notice title=Releasing $TAG::from $SHA"
 
@@ -140,15 +148,30 @@ jobs:
     if: needs.version.outputs.release == 'true'
     runs-on: ubuntu-latest
     steps:
+      # Re-running a version: its GitHub release (and binaries) already exist.
+      - id: exists
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: v${{ needs.version.outputs.version }}
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::notice title=Release exists::$TAG already has a GitHub release; skipping binaries."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/checkout@v4
+        if: steps.exists.outputs.skip != 'true'
         with: { fetch-depth: 0, ref: "${{ needs.version.outputs.sha }}" }
       - uses: actions/setup-node@v4
+        if: steps.exists.outputs.skip != 'true'
         with: { node-version: "22" }
       - uses: actions/setup-go@v5
+        if: steps.exists.outputs.skip != 'true'
         with: { go-version: "1.26" }
       - name: Build dashboard
+        if: steps.exists.outputs.skip != 'true'
         run: cd web && npm install --no-audit --no-fund && npm run build
       - uses: goreleaser/goreleaser-action@v6
+        if: steps.exists.outputs.skip != 'true'
         with:
           args: release --clean
         env:
@@ -206,15 +229,15 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write # required by `npm publish --provenance`
-    env:
-      # Secrets aren't readable from a step `if:`; surface it as job env first.
-      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+      id-token: write # npm Trusted Publishing (OIDC) and provenance
     steps:
       - uses: actions/checkout@v4
         with: { ref: "${{ needs.version.outputs.sha }}" }
       - uses: actions/setup-node@v4
         with: { node-version: "22", registry-url: "https://registry.npmjs.org" }
+      # Trusted Publishing needs npm >= 11.5.1; Node 22 bundles npm 10.
+      - name: Use npm 11
+        run: npm install -g npm@11 && npm --version
       - name: Set version and build
         run: |
           cd sdks/typescript
@@ -224,15 +247,27 @@ jobs:
       # Last gate before an immutable publish.
       - name: Validate package exports
         run: cd sdks/typescript && npm run check:exports
+      # Authenticates with npm Trusted Publishing (OIDC, nothing to expire)
+      # when it is configured for this package; otherwise falls back to the
+      # NPM_TOKEN secret. Fails loudly if neither works, like the PyPI job.
       # --tag is what keeps a prerelease off `npm install pushq`. Without it a
       # beta would silently become the default for every user.
       - name: Publish
-        if: env.NPM_TOKEN != ''
-        run: |
-          cd sdks/typescript
-          npm publish --provenance --access public --tag "${{ needs.version.outputs.npm_tag }}"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          V: ${{ needs.version.outputs.version }}
+          DIST_TAG: ${{ needs.version.outputs.npm_tag }}
+        run: |
+          cd sdks/typescript
+          # Safe to re-run: a version npm already has is left alone.
+          if npm view "pushq@$V" version >/dev/null 2>&1; then
+            echo "::notice title=Already on npm::pushq@$V is already published; nothing to do."
+            exit 0
+          fi
+          if ! npm publish --provenance --access public --tag "$DIST_TAG"; then
+            echo "::error title=npm publish failed::An E404/E401 here means npm didn't accept our credentials. Set up Trusted Publishing for pushq on npmjs.com (see docs/publishing.md) or refresh the NPM_TOKEN secret, then re-run."
+            exit 1
+          fi
 
   pypi:
     needs: version
