@@ -17,7 +17,7 @@ func main() {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
-	root.AddCommand(serveCmd(), devCmd(), migrateCmd(), usersCmd(), versionCmd(), queuesCmd(), tasksCmd())
+	root.AddCommand(serveCmd(), devCmd(), migrateCmd(), usersCmd(), openapiCmd(), versionCmd(), queuesCmd(), tasksCmd())
 
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)

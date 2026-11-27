@@ -1,4 +1,5 @@
-// Package api implements the pushq REST API (see api/openapi.yaml).
+// Package api implements the pushq REST API. Its OpenAPI spec is generated
+// from the routes at runtime (openapi.go); see /docs on a running server.
 package api
 
 import (
@@ -18,21 +19,29 @@ import (
 	"github.com/blissfulrays/pushq/internal/auth"
 	"github.com/blissfulrays/pushq/internal/config"
 	"github.com/blissfulrays/pushq/internal/store"
+	"github.com/blissfulrays/pushq/internal/workos"
 	"github.com/blissfulrays/pushq/web"
 )
 
 type Server struct {
-	Store          store.Store
-	Auth           *auth.Auth
-	Accounts       *accounts.Store // nil disables dashboard accounts
-	Log            *slog.Logger
-	Limits         config.Limits
-	MetricsPublic  bool
-	MetricsHandler http.Handler
-	Now            func() time.Time
-	Role           func() string // "leader" | "follower" for readyz
+	Store    store.Store
+	Auth     *auth.Auth
+	Accounts *accounts.Store // nil disables dashboard accounts
+
+	// WorkOS switches on SaaS mode together with Auth.EnableSaaS: WorkOS
+	// sign-in only, teams as WorkOS Organizations, team-isolated data.
+	WorkOS            *workos.Client
+	WorkOSRedirectURI string // "" = derive from the request
+	Log               *slog.Logger
+	Limits            config.Limits
+	MetricsPublic     bool
+	MetricsHandler    http.Handler
+	Now               func() time.Time
+	Role              func() string // "leader" | "follower" for readyz
 
 	loginLimiter limiterMap
+	routes       chi.Routes // the built router, walked to generate /openapi.json
+	spec         specCache
 }
 
 func (s *Server) Router() http.Handler {
@@ -41,11 +50,13 @@ func (s *Server) Router() http.Handler {
 
 	r.Get("/healthz", s.handleHealthz)
 	r.Get("/readyz", s.handleReadyz)
+	r.Get("/openapi.json", s.handleOpenAPI)
+	r.Get("/docs", s.handleDocs)
 	if s.MetricsHandler != nil {
 		if s.MetricsPublic {
-			r.Handle("/metrics", s.MetricsHandler)
+			r.Get("/metrics", s.MetricsHandler.ServeHTTP)
 		} else {
-			r.With(s.authenticate, s.require(auth.PermList)).Handle("/metrics", s.MetricsHandler)
+			r.With(s.authenticate, s.require(auth.PermList), s.operatorOnlyInSaaS).Get("/metrics", s.MetricsHandler.ServeHTTP)
 		}
 	}
 
@@ -58,6 +69,12 @@ func (s *Server) Router() http.Handler {
 		r.Post("/auth/login", s.handleLogin)
 		r.Post("/auth/logout", s.handleLogout)
 		r.Get("/auth/invites/{token}", s.handleInviteGet)
+		r.Get("/auth/workos/login", s.handleWorkOSLogin)
+		r.Post("/auth/email-code", s.handleEmailCode)
+		r.Post("/auth/email-code:verify", s.handleEmailCodeVerify)
+		r.Get("/auth/email-verification", s.handleVerifyPending)
+		r.Post("/auth/email-verification", s.handleVerifyEmail)
+		r.Get("/auth/workos/callback", s.handleWorkOSCallback)
 		r.Post("/auth/invites/{token}:accept", s.handleInviteAccept)
 
 		read := r.With(s.require(auth.PermRead))
@@ -90,7 +107,13 @@ func (s *Server) Router() http.Handler {
 			r.Use(s.requireUser)
 			r.Patch("/me", s.handleMePatch)
 			r.Post("/me/password", s.handleMePassword)
+
+			// SaaS mode: the user's teams (WorkOS Organizations).
+			r.Get("/teams", s.handleTeamsList)
+			r.Post("/teams", s.handleTeamCreate)
+			r.Post("/teams/{id}:switch", s.handleTeamSwitch)
 		})
+		r.With(s.require(auth.PermManage), s.requireAccounts).Patch("/teams/current", s.handleTeamRename)
 
 		// Team and API keys (admins).
 		r.Group(func(r chi.Router) {
@@ -108,20 +131,25 @@ func (s *Server) Router() http.Handler {
 		})
 	})
 
-	// Embedded dashboard. Auth happens in the browser (API key entered in
-	// the UI); the static assets themselves are public.
-	r.Handle("/ui", http.RedirectHandler("/ui/", http.StatusMovedPermanently))
-	r.Handle("/ui/*", http.StripPrefix("/ui", web.Handler()))
-	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/ui/", http.StatusFound)
-	})
-
-	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
+	// Anything no route matched: the API (and non-browser requests) get a
+	// JSON 404; browser page loads get the embedded dashboard, which is
+	// served from the site root. Its static assets are public; sign-in
+	// happens inside it.
+	apiNotFound := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		msg := "no such endpoint"
 		if rest, ok := strings.CutPrefix(r.URL.Path, "/v1/queues/"); ok && strings.Contains(rest, "/") {
 			msg += "; if the queue name contains '/', URL-encode it in the path (user/instagram -> user%2Finstagram)"
 		}
 		writeProblem(w, r, http.StatusNotFound, CodeNotFound, msg)
+	})
+	dashboard := web.Handler(apiNotFound)
+	s.routes = r
+	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/v1/") || r.URL.Path == "/v1" {
+			apiNotFound.ServeHTTP(w, r)
+			return
+		}
+		dashboard.ServeHTTP(w, r)
 	})
 	r.MethodNotAllowed(func(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, r, http.StatusMethodNotAllowed, CodeInvalidArgument, "method not allowed")
@@ -239,6 +267,20 @@ func (s *Server) require(perm auth.Perm) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// operatorOnlyInSaaS keeps instance-wide endpoints (/metrics names every
+// team's queues) to the operator's config-file keys in SaaS mode.
+func (s *Server) operatorOnlyInSaaS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.Auth.SaaS() {
+			if p := principal(r); p.Kind != auth.KindKey || p.Team != nil {
+				writeProblem(w, r, http.StatusForbidden, CodePermissionDenied, "only the operator's API keys can read instance metrics")
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // requireUser rejects callers that aren't a signed-in dashboard user.

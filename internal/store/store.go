@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -74,6 +75,16 @@ type Store interface {
 	CleanupTerminal(ctx context.Context, now time.Time, succeededTTL, failedTTL, dedupWindow time.Duration, limit int) (int64, error)
 	// HardDeletePurged removes pending tasks superseded by a purge watermark.
 	HardDeletePurged(ctx context.Context, limit int) (int64, error)
+}
+
+// DisplayQueueName strips the team namespace SaaS mode prefixes onto stored
+// queue names ("<ns>:emails" -> "emails"). Names without one are returned
+// unchanged; ":" can't appear in a queue name, so this is unambiguous.
+func DisplayQueueName(name string) string {
+	if i := strings.IndexByte(name, ':'); i >= 0 {
+		return name[i+1:]
+	}
+	return name
 }
 
 // SQLBacked is implemented by stores built on database/sql, letting other

@@ -20,6 +20,13 @@ import (
 //go:embed all:build
 var buildFS embed.FS
 
+// HasFile reports whether the embedded build contains name (e.g.
+// "docs/swagger-ui-bundle.js").
+func HasFile(name string) bool {
+	info, err := fs.Stat(sub(), name)
+	return err == nil && !info.IsDir()
+}
+
 // Bundled reports whether this binary carries the real dashboard.
 func Bundled() bool {
 	_, err := fs.Stat(sub(), "index.html")
@@ -34,28 +41,47 @@ func sub() fs.FS {
 	return f
 }
 
-// Handler serves the dashboard with an SPA fallback: unknown paths get
-// index.html so client-side routing works. Mount it under /ui.
-func Handler() http.Handler {
+// Handler serves the dashboard at the site root, for requests no API route
+// matched. Real files (and "/") are served to anyone. Any other path gets
+// index.html only for a browser page load (Accept: text/html), so client-side
+// routes like /queues/x survive a reload; API clients and probes get
+// notFound instead of a misleading 200 with HTML.
+func Handler(notFound http.Handler) http.Handler {
 	root := sub()
-	if !Bundled() {
-		return http.HandlerFunc(placeholder)
-	}
+	bundled := Bundled()
 	fileServer := http.FileServer(http.FS(root))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			notFound.ServeHTTP(w, r)
+			return
+		}
+		wantsPage := r.URL.Path == "/" || strings.Contains(r.Header.Get("Accept"), "text/html")
+		if !bundled {
+			if wantsPage {
+				placeholder(w, r)
+				return
+			}
+			notFound.ServeHTTP(w, r)
+			return
+		}
 		path := strings.TrimPrefix(r.URL.Path, "/")
 		if path == "" {
 			path = "index.html"
 		}
-		if _, err := fs.Stat(root, path); err != nil {
-			// SPA fallback.
-			r2 := new(http.Request)
-			*r2 = *r
-			r2.URL.Path = "/"
-			fileServer.ServeHTTP(w, r2)
+		if info, err := fs.Stat(root, path); err == nil && !info.IsDir() {
+			fileServer.ServeHTTP(w, r)
 			return
 		}
-		fileServer.ServeHTTP(w, r)
+		if !wantsPage || strings.HasPrefix(path, "_app/") {
+			notFound.ServeHTTP(w, r) // a missing asset is a 404, not the app
+			return
+		}
+		r2 := new(http.Request)
+		*r2 = *r
+		u := *r.URL
+		u.Path = "/"
+		r2.URL = &u
+		fileServer.ServeHTTP(w, r2)
 	})
 }
 

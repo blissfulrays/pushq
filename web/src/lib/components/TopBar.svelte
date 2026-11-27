@@ -2,7 +2,7 @@
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { base } from '$app/paths';
-	import { getReady, type Ready } from '$lib/api';
+	import { getReady, teamsApi, type Ready } from '$lib/api';
 	import { auth } from '$lib/auth.svelte';
 	import ThemeToggle from './ThemeToggle.svelte';
 
@@ -15,6 +15,7 @@
 	const s = $derived(auth.session);
 	const label = $derived.by(() => {
 		if (!s) return '';
+		if (s.mode === 'saas' && s.team) return s.team.name;
 		if (s.user) return s.user.name || s.user.email;
 		if (s.kind === 'api_key') return `API key · ${s.role}`;
 		if (s.mode === 'dev') return 'Dev mode';
@@ -28,6 +29,14 @@
 
 	function onWindowClick(e: MouseEvent) {
 		if (menuOpen && menuEl && !menuEl.contains(e.target as Node)) menuOpen = false;
+	}
+
+	async function switchTeam(id: number) {
+		menuOpen = false;
+		if (id === s?.team?.id) return;
+		await teamsApi.switchTo(id);
+		await auth.refresh();
+		goto(`${base}/`);
 	}
 
 	async function signOut() {
@@ -111,12 +120,27 @@
 									<p class="text-xs text-muted-foreground">Authentication is turned off.</p>
 								{/if}
 							</div>
-							{#if s.user}
-								<a role="menuitem" href="{base}/settings/account" class="block rounded-md px-3 py-1.5 text-sm hover:bg-accent" onclick={() => (menuOpen = false)}>Your account</a>
+							{#if s.mode === 'saas' && s.user}
+								<div class="border-b py-1">
+									<p class="px-3 pb-1 pt-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Teams</p>
+									{#each s.teams ?? [] as t (t.id)}
+										<button
+											role="menuitemradio"
+											aria-checked={t.id === s.team?.id}
+											type="button"
+											class="flex w-full items-center justify-between rounded-md px-3 py-1.5 text-left text-sm hover:bg-accent"
+											onclick={() => switchTeam(t.id)}
+										>
+											<span class="truncate">{t.name}</span>
+											{#if t.id === s.team?.id}<span aria-hidden="true" class="text-xs">✓</span>{/if}
+										</button>
+									{/each}
+									<a role="menuitem" href="{base}/welcome" class="block rounded-md px-3 py-1.5 text-sm text-muted-foreground hover:bg-accent hover:text-foreground" onclick={() => (menuOpen = false)}>+ Create team</a>
+								</div>
 							{/if}
-							{#if auth.can.manage && s.user}
-								<a role="menuitem" href="{base}/settings/team" class="block rounded-md px-3 py-1.5 text-sm hover:bg-accent" onclick={() => (menuOpen = false)}>Team</a>
-								<a role="menuitem" href="{base}/settings/api-keys" class="block rounded-md px-3 py-1.5 text-sm hover:bg-accent" onclick={() => (menuOpen = false)}>API keys</a>
+							{#if s.user}
+								<!-- Account, team and API keys are tabs on the settings page. -->
+								<a role="menuitem" href="{base}/settings" class="block rounded-md px-3 py-1.5 text-sm hover:bg-accent" onclick={() => (menuOpen = false)}>Settings</a>
 							{/if}
 							{#if s.kind === 'user' || s.kind === 'api_key'}
 								<button role="menuitem" type="button" class="block w-full rounded-md px-3 py-1.5 text-left text-sm hover:bg-accent" onclick={signOut}>Sign out</button>

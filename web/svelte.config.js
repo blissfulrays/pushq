@@ -13,7 +13,7 @@ const config = {
 			strict: true
 		}),
 		paths: {
-			base: '/ui',
+			base: '',
 			relative: false
 		}
 	}

@@ -21,10 +21,19 @@ export interface Permissions {
 	manage: boolean;
 }
 
+export interface TeamInfo {
+	id: number;
+	name: string;
+	role?: Role;
+}
+
 /** GET /v1/auth/session */
 export interface SessionInfo {
-	/** dev: auth disabled · open: no credentials needed yet · locked: sign-in required */
-	mode: 'dev' | 'open' | 'locked';
+	/**
+	 * dev: auth disabled · open: no credentials needed yet · locked: sign-in
+	 * required · saas: WorkOS sign-in, one isolated workspace per team
+	 */
+	mode: 'dev' | 'open' | 'locked' | 'saas';
 	setup_required: boolean;
 	setup_requires_key: boolean;
 	authenticated: boolean;
@@ -33,6 +42,11 @@ export interface SessionInfo {
 	user?: User;
 	key_name?: string;
 	permissions: Permissions;
+	sso_providers?: string[];
+	/** SaaS: current team, the user's teams, and whether they must pick/create one. */
+	team?: TeamInfo;
+	teams?: TeamInfo[];
+	needs_team?: boolean;
 }
 
 const noPerms: Permissions = { read: false, list: false, write: false, delete_queue: false, manage: false };
@@ -58,6 +72,10 @@ class Auth {
 
 	get user(): User | undefined {
 		return this.session?.user;
+	}
+
+	get saas(): boolean {
+		return this.session?.mode === 'saas';
 	}
 
 	/** Re-reads who we are. Called at startup, after sign-in/out and on 401s. */

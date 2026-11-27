@@ -198,10 +198,38 @@ export interface ApiKey {
 	last_used_at?: string;
 }
 
-/** Turns a server-relative "/ui/invite#token=…" path into a full link. */
+/** Turns a server-relative "/invite#token=…" path into a full link. */
 export function absoluteLink(path: string): string {
 	return `${window.location.origin}${path}`;
 }
+
+/** "Continue with GitHub": a full-page navigation to GitHub's consent screen. */
+export function githubLoginUrl(next?: string): string {
+	const q = new URLSearchParams({ provider: 'github' });
+	if (next) q.set('next', next);
+	return `${window.location.origin}/v1/auth/workos/login?${q}`;
+}
+
+/** A sign-in WorkOS paused until the person enters the verification code it emailed. */
+export const emailVerifyApi = {
+	pending: () => request<{ pending: boolean; email?: string }>('/v1/auth/email-verification'),
+	submit: (code: string) =>
+		request<{ user: User; next?: string }>('/v1/auth/email-verification', json('POST', { code }))
+};
+
+/** SaaS passwordless sign-in: email a 6-digit code, then sign in with it. */
+export const emailCodeApi = {
+	send: (email: string) => request<{ sent: boolean }>('/v1/auth/email-code', json('POST', { email })),
+	verify: (email: string, code: string) =>
+		request<{ user: User }>('/v1/auth/email-code:verify', json('POST', { email, code }))
+};
+
+export const teamsApi = {
+	list: () => request<{ teams: { id: number; name: string; role: Role }[] }>('/v1/teams'),
+	create: (name: string) => request<{ id: number; name: string; role: Role }>('/v1/teams', json('POST', { name })),
+	switchTo: (id: number) => request<void>(`/v1/teams/${id}:switch`, { method: 'POST' }),
+	renameCurrent: (name: string) => request<{ id: number; name: string }>('/v1/teams/current', json('PATCH', { name }))
+};
 
 export const accountsApi = {
 	setup: (body: { email: string; name: string; password: string; api_key?: string }) =>
@@ -224,8 +252,9 @@ export const accountsApi = {
 		request<{ link: Invite; path: string }>(`/v1/users/${id}/reset-link`, { method: 'POST' }),
 
 	listInvites: () => request<{ invites: Invite[] }>('/v1/invites'),
+	/** Self-hosted: returns a link to share. SaaS: WorkOS emails it (emailed: true). */
 	createInvite: (email: string, role: Role) =>
-		request<{ invite: Invite; path: string }>('/v1/invites', json('POST', { email, role })),
+		request<{ invite: Invite; path?: string; emailed?: boolean }>('/v1/invites', json('POST', { email, role })),
 	deleteInvite: (id: number) => request<void>(`/v1/invites/${id}`, { method: 'DELETE' }),
 
 	listKeys: () => request<{ keys: ApiKey[]; config_keys: number }>('/v1/api-keys'),

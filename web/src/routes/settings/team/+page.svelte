@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { absoluteLink, accountsApi, errorMessage, type Invite } from '$lib/api';
+	import { absoluteLink, accountsApi, errorMessage, teamsApi, type Invite } from '$lib/api';
 	import { auth, type Role, type User } from '$lib/auth.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -46,6 +46,21 @@
 	let linkDesc = $state('');
 	let link = $state('');
 
+	let teamName = $state(auth.session?.team?.name ?? '');
+	let renameMsg = $state<string | null>(null);
+
+	async function rename(e: SubmitEvent) {
+		e.preventDefault();
+		renameMsg = null;
+		try {
+			await teamsApi.renameCurrent(teamName);
+			await auth.refresh();
+			renameMsg = 'Saved.';
+		} catch (err) {
+			error = errorMessage(err);
+		}
+	}
+
 	let removeTarget = $state<User | null>(null);
 	let removeOpen = $state(false);
 	let busy = $state(false);
@@ -68,7 +83,7 @@
 	function showLink(title: string, desc: string, path: string) {
 		linkTitle = title;
 		linkDesc = desc;
-		link = absoluteLink(path);
+		link = path ? absoluteLink(path) : '';
 		linkOpen = true;
 	}
 
@@ -78,11 +93,19 @@
 		inviteErr = null;
 		try {
 			const res = await accountsApi.createInvite(inviteEmail, inviteRole);
-			showLink(
-				'Invite link created',
-				`Send this link to ${res.invite.email}. It works once and expires in 7 days.`,
-				res.path
-			);
+			if (res.emailed || !res.path) {
+				showLink(
+					'Invitation sent',
+					`We emailed ${res.invite.email} an invitation to join as ${res.invite.role}. They'll appear here once they accept.`,
+					''
+				);
+			} else {
+				showLink(
+					'Invite link created',
+					`Send this link to ${res.invite.email}. It works once and expires in 7 days.`,
+					res.path
+				);
+			}
 			inviteEmail = '';
 			await load();
 		} catch (err) {
@@ -151,10 +174,28 @@
 <div class="space-y-6">
 	<ErrorAlert message={error} />
 
+	{#if auth.saas}
+		<Card.Root>
+			<Card.Header>
+				<Card.Title>Team name</Card.Title>
+				<Card.Description>Everyone in the team sees this in the team switcher.</Card.Description>
+			</Card.Header>
+			<Card.Content>
+				<form class="flex flex-col gap-2 sm:flex-row sm:items-center" onsubmit={rename}>
+					<Input required maxlength={100} class="sm:max-w-sm" bind:value={teamName} />
+					<Button type="submit" variant="secondary">Save</Button>
+					{#if renameMsg}<span class="text-sm text-muted-foreground">{renameMsg}</span>{/if}
+				</form>
+			</Card.Content>
+		</Card.Root>
+	{/if}
+
 	<Card.Root>
 		<Card.Header>
 			<Card.Title>Invite a team member</Card.Title>
-			<Card.Description>You'll get a link to send them — pushq doesn't send email.</Card.Description>
+			<Card.Description>
+				{auth.saas ? "We'll email them an invitation." : "You'll get a link to send them — pushq doesn't send email."}
+			</Card.Description>
 		</Card.Header>
 		<Card.Content>
 			<form class="flex flex-col gap-2 sm:flex-row" onsubmit={sendInvite}>
@@ -166,7 +207,9 @@
 				>
 					{#each roles as r (r.value)}<option value={r.value}>{r.label}</option>{/each}
 				</select>
-				<Button type="submit" disabled={inviteBusy}>{inviteBusy ? 'Creating…' : 'Create invite link'}</Button>
+				<Button type="submit" disabled={inviteBusy}>
+					{inviteBusy ? 'Sending…' : auth.saas ? 'Send invite' : 'Create invite link'}
+				</Button>
 			</form>
 			<ErrorAlert message={inviteErr} class="mt-3" />
 			<ul class="mt-3 space-y-0.5 text-xs text-muted-foreground">
@@ -213,7 +256,9 @@
 							</Table.Cell>
 							<Table.Cell class="text-right">
 								<div class="flex justify-end gap-1">
-									<Button variant="ghost" size="sm" onclick={() => resetLink(u)}>Reset password</Button>
+									{#if !auth.saas}
+										<Button variant="ghost" size="sm" onclick={() => resetLink(u)}>Reset password</Button>
+									{/if}
 									<Button
 										variant="ghost"
 										size="sm"
@@ -278,7 +323,7 @@
 </div>
 
 <Dialog bind:open={linkOpen} title={linkTitle} description={linkDesc}>
-	<CopyField value={link} label="Copy link" />
+	{#if link}<CopyField value={link} label="Copy link" />{/if}
 	{#snippet footer()}
 		<Button onclick={() => (linkOpen = false)}>Done</Button>
 	{/snippet}

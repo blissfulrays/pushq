@@ -19,6 +19,7 @@
 	const isLogin = $derived(route.startsWith('/login'));
 	const isInvite = $derived(route.startsWith('/invite'));
 	const isPublic = $derived(isSetup || isLogin || isInvite);
+	const isWelcome = $derived(route.startsWith('/welcome'));
 
 	$effect(() => {
 		auth.refresh().catch((e) => (loadError = errorMessage(e)));
@@ -34,6 +35,11 @@
 			if (isPublic) return null;
 			const next = page.url.pathname + page.url.search;
 			return `${base}/login?next=${encodeURIComponent(next)}`;
+		}
+		// SaaS: a signed-in user with no team (new, or removed from theirs)
+		// must create or pick one before anything else.
+		if (s.mode === 'saas' && s.needs_team && !isWelcome && !route.startsWith('/settings/account')) {
+			return `${base}/welcome`;
 		}
 		if (isLogin) return safeNext(page.url.searchParams.get('next'));
 		return null;

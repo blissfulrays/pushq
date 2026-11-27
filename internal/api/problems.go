@@ -18,7 +18,10 @@ const (
 	CodePermissionDenied   = "permission_denied"
 	CodePayloadTooLarge    = "payload_too_large"
 	CodeRateLimited        = "rate_limited"
-	CodeInternal           = "internal"
+	// CodeEmailVerificationRequired: sign-in paused until the emailed
+	// verification code is entered (POST /v1/auth/email-verification).
+	CodeEmailVerificationRequired = "email_verification_required"
+	CodeInternal                  = "internal"
 )
 
 type problem struct {
@@ -38,7 +41,7 @@ func writeProblem(w http.ResponseWriter, r *http.Request, status int, code, deta
 		Title:    http.StatusText(status),
 		Status:   status,
 		Code:     code,
-		Detail:   detail,
+		Detail:   scrub(r, detail), // never reveal a team's internal namespace
 		Instance: r.URL.Path,
 	})
 }

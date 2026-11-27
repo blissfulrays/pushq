@@ -65,7 +65,7 @@ func usersCmd() *cobra.Command {
 				return err
 			}
 			if len(users) == 0 {
-				fmt.Println("No accounts yet — open the dashboard (/ui/) to create the first admin.")
+				fmt.Println("No accounts yet — open the dashboard (/) to create the first admin.")
 				return nil
 			}
 			tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
@@ -100,7 +100,7 @@ func usersCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Printf("Password reset link for %s (%s), valid until %s:\n\n  %s/ui/invite#token=%s\n\n",
+			fmt.Printf("Password reset link for %s (%s), valid until %s:\n\n  %s/invite#token=%s\n\n",
 				u.Email, u.Role, inv.ExpiresAt.Local().Format(time.DateTime), strings.TrimRight(baseURL, "/"), token)
 			fmt.Println("Opening it lets them choose a new password; it works once and signs them out everywhere.")
 			return nil

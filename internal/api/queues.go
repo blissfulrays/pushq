@@ -19,17 +19,18 @@ func (s *Server) handleQueueCreate(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, r, err)
 		return
 	}
+	mapUpsert(r, &u)
 	u.KeepSecret = false
 	q, err := s.Store.CreateQueue(r.Context(), u, s.Now())
 	if err != nil {
 		s.writeErr(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, queueToResponse(q))
+	writeJSON(w, http.StatusCreated, queueOut(r, q))
 }
 
 func (s *Server) handleQueuePut(w http.ResponseWriter, r *http.Request) {
-	name := queueParam(r)
+	name := queueParam(r) // validated as sent; mapUpsert namespaces it below
 	var body types.QueuePut
 	if err := s.decodeJSON(w, r, &body, 256<<10); err != nil {
 		s.writeErr(w, r, err)
@@ -40,6 +41,7 @@ func (s *Server) handleQueuePut(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, r, err)
 		return
 	}
+	mapUpsert(r, &u)
 	q, outcome, err := s.Store.UpsertQueue(r.Context(), u, s.Now())
 	if err != nil {
 		s.writeErr(w, r, err)
@@ -55,20 +57,20 @@ func (s *Server) handleQueuePut(w http.ResponseWriter, r *http.Request) {
 		result = "unchanged"
 	}
 	w.Header().Set("X-Pushq-Result", result)
-	writeJSON(w, status, queueToResponse(q))
+	writeJSON(w, status, queueOut(r, q))
 }
 
 func (s *Server) handleQueueGet(w http.ResponseWriter, r *http.Request) {
-	q, err := s.Store.GetQueue(r.Context(), queueParam(r))
+	q, err := s.Store.GetQueue(r.Context(), inName(r, queueParam(r)))
 	if err != nil {
 		s.writeErr(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, queueToResponse(q))
+	writeJSON(w, http.StatusOK, queueOut(r, q))
 }
 
 func (s *Server) handleQueuePatch(w http.ResponseWriter, r *http.Request) {
-	name := queueParam(r)
+	name := inName(r, queueParam(r))
 	var body types.QueuePatch
 	if err := s.decodeJSON(w, r, &body, 256<<10); err != nil {
 		s.writeErr(w, r, err)
@@ -81,18 +83,23 @@ func (s *Server) handleQueuePatch(w http.ResponseWriter, r *http.Request) {
 	}
 	// Validate the merged result inside the store transaction, before it is
 	// written, so a patch can never persist invalid config.
-	p.Validate = validateUpsert
+	p.Validate = validateStored(r)
+	if p.DeadLetterQueue != nil && *p.DeadLetterQueue != "" {
+		dlq := inName(r, *p.DeadLetterQueue)
+		p.DeadLetterQueue = &dlq
+	}
 	q, err := s.Store.PatchQueue(r.Context(), name, p, s.Now())
 	if err != nil {
 		s.writeErr(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, queueToResponse(q))
+	writeJSON(w, http.StatusOK, queueOut(r, q))
 }
 
 func (s *Server) handleQueueList(w http.ResponseWriter, r *http.Request) {
 	opts := store.ListQueuesOpts{
-		NamePrefix: r.URL.Query().Get("name_prefix"),
+		// A team only ever lists inside its own namespace.
+		NamePrefix: teamPrefix(r) + r.URL.Query().Get("name_prefix"),
 		PageToken:  r.URL.Query().Get("page_token"),
 	}
 	if v := r.URL.Query().Get("page_size"); v != "" {
@@ -110,13 +117,13 @@ func (s *Server) handleQueueList(w http.ResponseWriter, r *http.Request) {
 	}
 	out := types.QueueList{Queues: []types.QueueResponse{}, NextPageToken: next}
 	for _, q := range queues {
-		out.Queues = append(out.Queues, queueToResponse(q))
+		out.Queues = append(out.Queues, queueOut(r, q))
 	}
 	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) handleQueueDelete(w http.ResponseWriter, r *http.Request) {
-	if err := s.Store.DeleteQueue(r.Context(), queueParam(r)); err != nil {
+	if err := s.Store.DeleteQueue(r.Context(), inName(r, queueParam(r))); err != nil {
 		s.writeErr(w, r, err)
 		return
 	}
@@ -124,34 +131,34 @@ func (s *Server) handleQueueDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleQueuePause(w http.ResponseWriter, r *http.Request) {
-	q, err := s.Store.SetQueueState(r.Context(), queueParam(r), store.QueuePaused, s.Now())
+	q, err := s.Store.SetQueueState(r.Context(), inName(r, queueParam(r)), store.QueuePaused, s.Now())
 	if err != nil {
 		s.writeErr(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, queueToResponse(q))
+	writeJSON(w, http.StatusOK, queueOut(r, q))
 }
 
 func (s *Server) handleQueueResume(w http.ResponseWriter, r *http.Request) {
-	q, err := s.Store.SetQueueState(r.Context(), queueParam(r), store.QueueRunning, s.Now())
+	q, err := s.Store.SetQueueState(r.Context(), inName(r, queueParam(r)), store.QueueRunning, s.Now())
 	if err != nil {
 		s.writeErr(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, queueToResponse(q))
+	writeJSON(w, http.StatusOK, queueOut(r, q))
 }
 
 func (s *Server) handleQueuePurge(w http.ResponseWriter, r *http.Request) {
-	q, err := s.Store.PurgeQueue(r.Context(), queueParam(r), s.Now())
+	q, err := s.Store.PurgeQueue(r.Context(), inName(r, queueParam(r)), s.Now())
 	if err != nil {
 		s.writeErr(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusAccepted, queueToResponse(q))
+	writeJSON(w, http.StatusAccepted, queueOut(r, q))
 }
 
 func (s *Server) handleQueueStats(w http.ResponseWriter, r *http.Request) {
-	name := queueParam(r)
+	name := inName(r, queueParam(r))
 	now := s.Now()
 	q, err := s.Store.GetQueue(r.Context(), name)
 	if err != nil {

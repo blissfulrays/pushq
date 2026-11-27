@@ -1,5 +1,7 @@
 <script lang="ts">
+	import { page } from '$app/state';
 	import { accountsApi, errorMessage } from '$lib/api';
+	import SaasSignIn from '$lib/components/SaasSignIn.svelte';
 	import { auth } from '$lib/auth.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -12,7 +14,9 @@
 	let key = $state('');
 	let useKey = $state(false);
 	let busy = $state(false);
-	let error = $state<string | null>(null);
+	let error = $state<string | null>(page.url.searchParams.get('error'));
+
+	const next = $derived(page.url.searchParams.get('next') ?? '');
 
 	async function submit(e: SubmitEvent) {
 		e.preventDefault();
@@ -43,6 +47,9 @@
 	<title>Sign in · pushq</title>
 </svelte:head>
 
+{#if auth.saas}
+	<SaasSignIn {next} initialError={error} />
+{:else}
 <AuthCard
 	title="Sign in"
 	description={useKey ? 'Use an API key for this browser tab only.' : 'Sign in to manage your queues.'}
@@ -79,3 +86,4 @@
 		{/if}
 	</form>
 </AuthCard>
+{/if}
