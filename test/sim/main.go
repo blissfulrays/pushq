@@ -1,3 +1,5 @@
+//go:build unix
+
 // Command sim is a production-shaped load test for a running pushq server.
 //
 // It plays both sides of the queue: a producer that enqueues over the HTTP API
