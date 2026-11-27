@@ -129,7 +129,9 @@ be idempotent; the `webhook-id` is your idempotency key.
 | C# / .NET | `dotnet add package Pushq` | [docs](sdks/dotnet/README.md) |
 
 Every SDK ships the client **and** a constant-time `verify_signature` helper
-for receivers.
+for receivers. Clients talk to the hosted API at `https://api.pushqueue.dev`
+unless you give them a base URL, so for a self-hosted server pass its URL
+(e.g. `http://localhost:8080`).
 
 **API reference:** every server serves interactive docs (Swagger UI) at
 `/docs` and its OpenAPI 3.1 spec at `/openapi.json`. Both are generated from

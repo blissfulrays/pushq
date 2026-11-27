@@ -4,7 +4,8 @@ Quickstart::
 
     from pushq import Pushq, RateLimits, Retry, Target
 
-    pq = Pushq("http://localhost:8080", api_key="pq_...")
+    pq = Pushq(api_key="pq_...")  # hosted API at https://api.pushqueue.dev
+    # self-hosted: Pushq("http://localhost:8080", api_key="pq_...")
     pq.upsert_queue(
         "account-42",
         rate_limits=RateLimits(max_dispatches_per_second=10),
@@ -19,7 +20,7 @@ Quickstart::
         retry=Retry(max_attempts=3),      # per-task override
     )
 """
-from ._client import AsyncPushq, Pushq, PushqError
+from ._client import DEFAULT_BASE_URL, AsyncPushq, Pushq, PushqError
 from ._models import (
     Attempt,
     BatchError,
@@ -38,6 +39,7 @@ from .webhooks import WebhookVerificationError, sign, verify_signature
 __version__ = "0.1.0"
 
 __all__ = [
+    "DEFAULT_BASE_URL",
     "Pushq",
     "AsyncPushq",
     "PushqError",

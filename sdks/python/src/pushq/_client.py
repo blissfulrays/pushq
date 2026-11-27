@@ -22,6 +22,15 @@ from ._models import (
 )
 
 
+DEFAULT_BASE_URL = "https://api.pushqueue.dev"
+"""The hosted pushq API, used when no base_url is given. Pass your own
+server's URL (e.g. "http://localhost:8080") to use a self-hosted pushq."""
+
+
+def _base(base_url: Optional[str]) -> str:
+    return (base_url or "").strip().rstrip("/") or DEFAULT_BASE_URL
+
+
 def _seg(s: str) -> str:
     """Percent-encode one path segment. Queue names may contain '/' (folders,
     e.g. "user/instagram"), which must travel as %2F."""
@@ -109,7 +118,7 @@ def _task_create_wire(
 class Pushq:
     """Synchronous client.
 
-    >>> pq = Pushq("http://localhost:8080", api_key="pq_...")
+    >>> pq = Pushq(api_key="pq_...")  # hosted API; or Pushq("http://localhost:8080", ...)
     >>> pq.upsert_queue("account-42", rate_limits=RateLimits(max_dispatches_per_second=10))
     >>> pq.create_task("account-42", path="/hooks/send", json_body={"user": 1},
     ...                delay_seconds=3600, task_id="follow_up_abc",
@@ -118,7 +127,7 @@ class Pushq:
 
     def __init__(
         self,
-        base_url: str,
+        base_url: Optional[str] = None,
         api_key: Optional[str] = None,
         *,
         timeout: float = 30.0,
@@ -126,7 +135,7 @@ class Pushq:
     ):
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
         self._http = client or httpx.Client(
-            base_url=base_url.rstrip("/"), headers=headers, timeout=timeout
+            base_url=_base(base_url), headers=headers, timeout=timeout
         )
 
     def close(self) -> None:
@@ -294,7 +303,7 @@ class AsyncPushq:
 
     def __init__(
         self,
-        base_url: str,
+        base_url: Optional[str] = None,
         api_key: Optional[str] = None,
         *,
         timeout: float = 30.0,
@@ -302,7 +311,7 @@ class AsyncPushq:
     ):
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
         self._http = client or httpx.AsyncClient(
-            base_url=base_url.rstrip("/"), headers=headers, timeout=timeout
+            base_url=_base(base_url), headers=headers, timeout=timeout
         )
 
     async def aclose(self) -> None:

@@ -1,4 +1,4 @@
-export { Pushq, PushqError, type PushqOptions } from "./client.js";
+export { DEFAULT_BASE_URL, Pushq, PushqError, type PushqOptions } from "./client.js";
 export {
   verifySignature, sign, WebhookVerificationError, type VerifyOptions,
 } from "./webhooks.js";

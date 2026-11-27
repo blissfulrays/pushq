@@ -1,10 +1,11 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
+	import { base } from '$app/paths';
 	import { page } from '$app/state';
 	import { api, ApiError, errorMessage, type Queue } from '$lib/api';
 	import { auth } from '$lib/auth.svelte';
 	import { folderHref, groupByFolder, queueHref, type FolderRow, type Row } from '$lib/folders';
-	import { Button } from '$lib/components/ui/button';
+	import { Button, buttonVariants } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import * as Card from '$lib/components/ui/card';
 	import * as Table from '$lib/components/ui/table';
@@ -14,6 +15,7 @@
 	import TimeStamp from '$lib/components/TimeStamp.svelte';
 	import Pager from '$lib/components/Pager.svelte';
 	import { paginate, storedPageSize } from '$lib/pagination';
+	import { cn } from '$lib/utils';
 
 	/** Upper bound on queues fetched for one folder view (pages of 1000). */
 	const MAX_QUEUES = 5000;
@@ -32,8 +34,6 @@
 	let forbidden = $state(false);
 	let directName = $state('');
 
-	const createHint =
-		'No queues yet — create one with PUT /v1/queues/{name}. Use a name like user/instagram to put it in a folder.';
 
 	// Responses can arrive out of order (polling + typing + folder changes);
 	// only the latest request may write state.
@@ -80,6 +80,15 @@
 
 	const folderPrefix = $derived(folder ? folder + '/' : '');
 	const searching = $derived(filter.trim() !== '');
+	// Nothing anywhere yet (not just an empty folder or search): show
+	// onboarding instead of an empty table.
+	const firstRun = $derived(queues !== null && queues.length === 0 && !searching && !folder);
+	const canCreateKeys = $derived(auth.can.manage && !!auth.user);
+	const linkButton = (variant: 'default' | 'outline') =>
+		cn(
+			'inline-flex h-9 items-center justify-center gap-2 whitespace-nowrap rounded-md px-4 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring [&_svg]:size-4',
+			buttonVariants.variant[variant]
+		);
 
 	let lastTyped: string | undefined;
 	$effect(() => {
@@ -160,7 +169,7 @@
 				<p class="mt-1 text-sm text-muted-foreground">Everything this server is dispatching.</p>
 			{/if}
 		</div>
-		{#if !forbidden}
+		{#if !forbidden && !firstRun}
 			<Input
 				class="w-full sm:w-64"
 				placeholder={folder ? `Filter in ${folder}/…` : 'Filter by name prefix…'}
@@ -186,6 +195,39 @@
 				</form>
 			</Card.Content>
 		</Card.Root>
+	{:else if firstRun}
+		<div
+			class="flex min-h-[50vh] flex-col items-center justify-center rounded-xl border border-dashed px-6 py-16 text-center"
+		>
+			<div class="flex size-12 items-center justify-center rounded-full bg-muted text-muted-foreground">
+				<svg
+					class="size-6"
+					viewBox="0 0 24 24"
+					fill="none"
+					stroke="currentColor"
+					stroke-width="2"
+					stroke-linecap="round"
+					stroke-linejoin="round"
+					aria-hidden="true"
+				>
+					<path d="m15.5 7.5 2.3 2.3a1 1 0 0 0 1.4 0l2.1-2.1a1 1 0 0 0 0-1.4L19 4" />
+					<path d="m21 2-9.6 9.6" />
+					<circle cx="7.5" cy="15.5" r="5.5" />
+				</svg>
+			</div>
+			<h2 class="mt-4 text-lg font-semibold tracking-tight">No queues yet</h2>
+			<p class="mt-2 max-w-md text-sm text-muted-foreground">
+				{canCreateKeys ? 'Create an API key' : 'Get an API key from a team admin'}, then create queues and
+				tasks from your app. Name a queue like
+				<code class="font-mono text-xs">user/instagram</code> to group it in a folder.
+			</p>
+			<div class="mt-6 flex flex-wrap justify-center gap-2">
+				{#if canCreateKeys}
+					<a href="{base}/settings/api-keys" class={linkButton('default')}>Create API key</a>
+				{/if}
+				<a href="/docs" data-sveltekit-reload class={linkButton('outline')}>API docs</a>
+			</div>
+		</div>
 	{:else}
 		<div class="rounded-xl border">
 			<Table.Root>
@@ -211,7 +253,7 @@
 								{:else if folder}
 									No queues in {folder}/.
 								{:else}
-									{createHint}
+									No queues yet.
 								{/if}
 							</Table.Cell>
 						</Table.Row>

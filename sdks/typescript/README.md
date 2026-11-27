@@ -13,7 +13,8 @@ npm install pushq
 ```ts
 import { Pushq } from "pushq";
 
-const pq = new Pushq({ baseUrl: "http://localhost:8080", apiKey: "pq_..." });
+const pq = new Pushq({ apiKey: "pq_..." }); // hosted API at https://api.pushqueue.dev
+// Self-hosting? new Pushq({ baseUrl: "http://localhost:8080", apiKey: "pq_..." })
 
 // Queues are created/updated at runtime — idempotent, safe to call on every enqueue.
 await pq.upsertQueue("account-42", {

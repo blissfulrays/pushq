@@ -23,9 +23,15 @@ export class PushqError extends Error {
   }
 }
 
+/** The hosted pushq API, used when no baseUrl is given. */
+export const DEFAULT_BASE_URL = "https://api.pushqueue.dev";
+
 export interface PushqOptions {
-  /** e.g. "http://localhost:8080" */
-  baseUrl: string;
+  /**
+   * Your pushq server, e.g. "http://localhost:8080" when self-hosting.
+   * Defaults to the hosted API, {@link DEFAULT_BASE_URL}.
+   */
+  baseUrl?: string;
   apiKey?: string;
   /** Per-request timeout in ms. Default 30_000. */
   timeoutMs?: number;
@@ -39,8 +45,8 @@ export class Pushq {
   private readonly timeoutMs: number;
   private readonly fetchFn: typeof fetch;
 
-  constructor(opts: PushqOptions) {
-    this.base = opts.baseUrl.replace(/\/+$/, "");
+  constructor(opts: PushqOptions = {}) {
+    this.base = (opts.baseUrl?.trim() || DEFAULT_BASE_URL).replace(/\/+$/, "");
     this.apiKey = opts.apiKey;
     this.timeoutMs = opts.timeoutMs ?? 30_000;
     this.fetchFn = opts.fetch ?? globalThis.fetch;

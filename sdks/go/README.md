@@ -13,7 +13,9 @@ import (
     pushq "github.com/blissfulrays/pushq/sdks/go"
 )
 
-pq := pushq.New("http://localhost:8080", "pq_...")
+// "" = the hosted API (https://api.pushqueue.dev).
+// Self-hosting? Pass your server instead, e.g. "http://localhost:8080".
+pq := pushq.New("", "pq_...")
 ctx := context.Background()
 
 // Queues are created/updated at runtime — idempotent.

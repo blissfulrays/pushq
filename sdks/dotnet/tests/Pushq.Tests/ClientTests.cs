@@ -40,6 +40,20 @@ public class ClientTests
         return (client, rec);
     }
 
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("  ")]
+    public async Task DefaultsToHostedApi(string? baseUrl)
+    {
+        Assert.Equal("https://api.pushqueue.dev", PushqClient.DefaultBaseUrl);
+        var rec = new Recorder { Status = HttpStatusCode.NoContent, Response = "" };
+        var c = new PushqClient(new PushqClientOptions { BaseUrl = baseUrl!, HttpClient = new HttpClient(rec) });
+        await c.DeleteQueueAsync("emails");
+        Assert.Equal("https://api.pushqueue.dev/v1/queues/emails", rec.Requests.Single().Url);
+        Assert.Equal(PushqClient.DefaultBaseUrl, new PushqClientOptions().BaseUrl);
+    }
+
     private const string QueueJson = @"{""name"":""user/instagram"",""state"":""paused"",
         ""rate_limits"":{""max_dispatches_per_second"":5,""max_burst_size"":5,""max_concurrent_dispatches"":10},
         ""retry"":{""max_attempts"":3,""max_retry_duration_seconds"":0,""min_backoff_seconds"":0.1,""max_backoff_seconds"":3600,""max_doublings"":16},

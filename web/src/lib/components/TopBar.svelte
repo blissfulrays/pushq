@@ -1,14 +1,12 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { base } from '$app/paths';
-	import { getReady, teamsApi, type Ready } from '$lib/api';
+	import { teamsApi } from '$lib/api';
 	import { auth } from '$lib/auth.svelte';
 	import ThemeToggle from './ThemeToggle.svelte';
 
 	let { showAccount = true }: { showAccount?: boolean } = $props();
 
-	let ready = $state<Ready | null>(null);
 	let menuOpen = $state(false);
 	let menuEl = $state<HTMLElement | null>(null);
 
@@ -44,12 +42,6 @@
 		await auth.signOut();
 		goto(`${base}/login`);
 	}
-
-	onMount(() => {
-		getReady()
-			.then((r) => (ready = r))
-			.catch(() => (ready = null));
-	});
 </script>
 
 <svelte:window onclick={onWindowClick} />
@@ -76,14 +68,6 @@
 		</a>
 
 		<div class="ml-auto flex items-center gap-1.5">
-			{#if ready}
-				<span
-					class="hidden rounded-full border px-2.5 py-0.5 font-mono text-xs text-muted-foreground sm:inline"
-					title="Server dialect and role from /readyz"
-				>
-					{ready.dialect ?? '?'} · {ready.role ?? '?'}
-				</span>
-			{/if}
 			{#if showAccount && s}
 				<div class="relative" bind:this={menuEl}>
 					<button

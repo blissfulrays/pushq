@@ -14,7 +14,8 @@ pip install pushq
 ```python
 from pushq import Pushq, RateLimits, Retry, Target
 
-pq = Pushq("http://localhost:8080", api_key="pq_...")
+pq = Pushq(api_key="pq_...")  # hosted API at https://api.pushqueue.dev
+# Self-hosting? Pushq("http://localhost:8080", api_key="pq_...")
 
 # Queues are created/updated at runtime — idempotent, safe to call on every enqueue.
 pq.upsert_queue(
