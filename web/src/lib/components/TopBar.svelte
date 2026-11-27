@@ -139,11 +139,8 @@
 								</div>
 							{/if}
 							{#if s.user}
-								<a role="menuitem" href="{base}/settings/account" class="block rounded-md px-3 py-1.5 text-sm hover:bg-accent" onclick={() => (menuOpen = false)}>Your account</a>
-							{/if}
-							{#if auth.can.manage && s.user}
-								<a role="menuitem" href="{base}/settings/team" class="block rounded-md px-3 py-1.5 text-sm hover:bg-accent" onclick={() => (menuOpen = false)}>Team</a>
-								<a role="menuitem" href="{base}/settings/api-keys" class="block rounded-md px-3 py-1.5 text-sm hover:bg-accent" onclick={() => (menuOpen = false)}>API keys</a>
+								<!-- Account, team and API keys are tabs on the settings page. -->
+								<a role="menuitem" href="{base}/settings" class="block rounded-md px-3 py-1.5 text-sm hover:bg-accent" onclick={() => (menuOpen = false)}>Settings</a>
 							{/if}
 							{#if s.kind === 'user' || s.kind === 'api_key'}
 								<button role="menuitem" type="button" class="block w-full rounded-md px-3 py-1.5 text-left text-sm hover:bg-accent" onclick={signOut}>Sign out</button>

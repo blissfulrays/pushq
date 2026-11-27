@@ -93,7 +93,7 @@ func (c *client) must(method, path string, body any, want int) map[string]any {
 	return out
 }
 
-// tokenFrom extracts the secret from a returned "/ui/invite#token=..." path.
+// tokenFrom extracts the secret from a returned "/invite#token=..." path.
 func tokenFrom(t *testing.T, out map[string]any) string {
 	t.Helper()
 	path, _ := out["path"].(string)
@@ -250,5 +250,32 @@ func TestLoginRateLimited(t *testing.T) {
 	}
 	if !limited {
 		t.Fatal("15 rapid failed logins were never rate limited")
+	}
+}
+
+// The running server serves its generated OpenAPI spec and Swagger UI.
+func TestOpenAPIAndDocsServed(t *testing.T) {
+	base := newAccountsServer(t, nil)
+	resp, err := http.Get(base + "/openapi.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var spec map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&spec); err != nil || resp.StatusCode != 200 {
+		t.Fatalf("/openapi.json: %d %v", resp.StatusCode, err)
+	}
+	resp.Body.Close()
+	if _, ok := spec["paths"].(map[string]any)["/v1/queues/{queue}:pause"]; !ok {
+		t.Fatal("spec lacks /v1/queues/{queue}:pause")
+	}
+
+	resp, err = http.Get(base + "/docs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 || !strings.Contains(string(page), "SwaggerUIBundle") || !strings.Contains(string(page), "/openapi.json") {
+		t.Fatalf("/docs: %d", resp.StatusCode)
 	}
 }

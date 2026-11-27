@@ -1,4 +1,4 @@
-// Package types holds the JSON DTOs mirroring api/openapi.yaml.
+// Package types holds the API's JSON DTOs; the OpenAPI spec is generated from them.
 package types
 
 import "time"
@@ -45,11 +45,11 @@ type QueueCreate struct {
 
 // QueuePatch updates only the provided fields.
 type QueuePatch struct {
-	State           *string            `json:"state,omitempty"`
-	RateLimits      *RateLimitsPatch   `json:"rate_limits,omitempty"`
-	Retry           *Retry             `json:"retry,omitempty"`
-	Target          *TargetPatch       `json:"target,omitempty"`
-	DeadLetterQueue *string            `json:"dead_letter_queue,omitempty"`
+	State           *string          `json:"state,omitempty"`
+	RateLimits      *RateLimitsPatch `json:"rate_limits,omitempty"`
+	Retry           *Retry           `json:"retry,omitempty"`
+	Target          *TargetPatch     `json:"target,omitempty"`
+	DeadLetterQueue *string          `json:"dead_letter_queue,omitempty"`
 }
 
 type RateLimitsPatch = RateLimits
@@ -62,15 +62,15 @@ type TargetPatch struct {
 }
 
 type QueueResponse struct {
-	Name            string              `json:"name"`
-	State           string              `json:"state"`
-	RateLimits      RateLimitsResponse  `json:"rate_limits"`
-	Retry           RetryResponse       `json:"retry"`
-	Target          TargetResponse      `json:"target"`
-	DeadLetterQueue string              `json:"dead_letter_queue,omitempty"`
-	PurgedAt        *time.Time          `json:"purged_at,omitempty"`
-	CreatedAt       time.Time           `json:"created_at"`
-	UpdatedAt       time.Time           `json:"updated_at"`
+	Name            string             `json:"name"`
+	State           string             `json:"state"`
+	RateLimits      RateLimitsResponse `json:"rate_limits"`
+	Retry           RetryResponse      `json:"retry"`
+	Target          TargetResponse     `json:"target"`
+	DeadLetterQueue string             `json:"dead_letter_queue,omitempty"`
+	PurgedAt        *time.Time         `json:"purged_at,omitempty"`
+	CreatedAt       time.Time          `json:"created_at"`
+	UpdatedAt       time.Time          `json:"updated_at"`
 }
 
 type RateLimitsResponse struct {

@@ -82,8 +82,8 @@
 				<Card.Header>
 					<Card.Title>Sign-in</Card.Title>
 					<Card.Description>
-						Your password, passkeys and two-factor settings are managed by our sign-in provider. Use
-						“Forgot password” on the sign-in page to change your password.
+						You sign in with a code emailed to {auth.user.email}, or with GitHub. There's no
+						password to manage.
 					</Card.Description>
 				</Card.Header>
 			</Card.Root>

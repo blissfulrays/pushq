@@ -7,7 +7,7 @@ pushq dev
 ```
 
 That's a complete local queue: SQLite in a temp file, no auth, fast timers,
-dashboard at http://localhost:8080/ui/. (Production: `pushq serve` — see
+dashboard at http://localhost:8080/. (Production: `pushq serve` — see
 [deploy.md](deploy.md).)
 
 ## 2. Create a queue
@@ -64,7 +64,7 @@ curl "localhost:8080/v1/queues/emails/tasks?state=succeeded"
 curl localhost:8080/v1/queues/emails/tasks/welcome-user-42/attempts
 ```
 
-…or open the dashboard: http://localhost:8080/ui/
+…or open the dashboard: http://localhost:8080/
 
 ## 6. Operate
 
@@ -77,4 +77,4 @@ curl -X POST localhost:8080/v1/queues/emails/tasks/welcome-user-42:run   # force
 
 Next: [SDKs](../README.md#sdks) ·
 [Cloud Tasks migration](migrate-from-cloud-tasks.md) ·
-[deployment](deploy.md) · [API reference](../api/openapi.yaml)
+[deployment](deploy.md) · API reference: `/docs` on your server

@@ -163,7 +163,7 @@ func runServe(ctx context.Context, cfg config.Config, dev bool) error {
 	case wos != nil:
 	case open:
 		logger.Warn("no API keys and no dashboard accounts yet — the API is UNAUTHENTICATED. " +
-			"Open the dashboard at /ui/ to create the first admin account (this locks the API), " +
+			"Open the dashboard at / to create the first admin account (this locks the API), " +
 			"or set api_keys in config / PUSHQ_API_KEYS")
 	}
 

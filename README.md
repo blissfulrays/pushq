@@ -66,7 +66,7 @@ go install github.com/blissfulrays/pushq/cmd/pushq@latest
 Release binaries and the Docker image bundle the dashboard. `go install` does
 not — the compiled dashboard is a build artifact rather than a committed file,
 and the Go module proxy never runs npm. Such a build is fully functional and
-serves a short placeholder at `/ui/`. To get the dashboard from source, run
+serves a short placeholder at `/`. To get the dashboard from source, run
 `make build`, which builds the frontend first (needs Node 20+).
 
 ## Run
@@ -129,8 +129,13 @@ be idempotent; the `webhook-id` is your idempotency key.
 | C# / .NET | `dotnet add package Pushq` | [docs](sdks/dotnet/README.md) |
 
 Every SDK ships the client **and** a constant-time `verify_signature` helper
-for receivers. The REST API is fully described in
-[api/openapi.yaml](api/openapi.yaml).
+for receivers.
+
+**API reference:** every server serves interactive docs (Swagger UI) at
+`/docs` and its OpenAPI 3.1 spec at `/openapi.json`. Both are generated from
+the server's own routes and Go types, so they always match the running
+version. `pushq openapi` prints the same spec without a server (handy for
+generating clients).
 
 ## Queue folders
 
@@ -151,7 +156,7 @@ curl 'localhost:8080/v1/queues?name_prefix=user/'   # everything in the folder
 
 ## Dashboard
 
-The binary embeds a dashboard at `/ui/` — queues browsable by folder with live
+The binary embeds a dashboard at `/` — queues browsable by folder with live
 stats, pause/resume/purge, task browsing with attempt history, force-run.
 
 ### Two ways to run it
@@ -159,7 +164,7 @@ stats, pause/resume/purge, task browsing with attempt history, force-run.
 | | Self-hosted (default) | SaaS mode |
 |---|---|---|
 | Turned on by | nothing — no WorkOS settings | `WORKOS_CLIENT_ID` + `WORKOS_API_KEY` |
-| Sign-in | local accounts; first launch creates the admin | WorkOS AuthKit only (it handles sign-up, passwords, MFA) |
+| Sign-in | local accounts; first launch creates the admin | email code or GitHub on pushq's own sign-in page (via WorkOS); signing in creates the account |
 | Teams | one: you, plus anyone you invite | anyone can sign up and create teams; a person can be in several and switch |
 | Data | shared by everyone on the server | **isolated per team**: queues, tasks, API keys, stats |
 | Invites | copy-a-link | emailed by WorkOS |
@@ -168,7 +173,7 @@ See [SaaS mode](docs/deploy.md#saas-mode-workos) for the WorkOS dashboard setup.
 
 ### Sign-in and team
 
-- **First launch:** opening `/ui/` on a new server asks you to create the
+- **First launch:** opening the dashboard on a new server asks you to create the
   admin account. From then on the API needs a login session or an API key.
   If the server already has `api_keys` in its config, setup also asks for one
   of its admin keys, so a protected server can't be claimed by whoever reaches

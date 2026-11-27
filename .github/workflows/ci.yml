@@ -60,13 +60,20 @@ jobs:
           ./pushq dev --listen :18080 --memory &
           for i in $(seq 30); do curl -sf localhost:18080/healthz >/dev/null && break; sleep 0.5; done
 
-          curl -sf localhost:18080/ui/ | grep -q '<title>pushq</title>'
-          curl -sf localhost:18080/ui/ | grep -q 'not bundled' \
+          curl -sf localhost:18080/ | grep -q '<title>pushq</title>'
+          curl -sf localhost:18080/ | grep -q 'not bundled' \
             && { echo "placeholder served — real dashboard did not embed"; exit 1; }
 
-          ASSET=$(curl -s localhost:18080/ui/ | grep -o '/ui/_app/immutable/entry/start[^"]*' | head -1)
+          ASSET=$(curl -s localhost:18080/ | grep -o '/_app/immutable/entry/start[^"]*' | head -1)
           test -n "$ASSET" && curl -sf -o /dev/null "localhost:18080$ASSET"
-          curl -sf -o /dev/null localhost:18080/ui/queues/demo   # SPA fallback
+          curl -sf -o /dev/null -H 'Accept: text/html' localhost:18080/queues/demo   # SPA fallback (browser page load)
+          # API docs: generated spec, and Swagger UI served from the binary (not a CDN).
+          curl -sf localhost:18080/openapi.json | grep -q '"openapi": "3.1.0"'
+          curl -sf localhost:18080/docs | grep -q 'src="/docs/swagger-ui-bundle.js"'
+          curl -sf -o /dev/null localhost:18080/docs/swagger-ui-bundle.js
+          # Non-browser requests to unknown paths get a JSON 404, not the app.
+          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:18080/no-such-thing)" = 404
+          curl -s localhost:18080/v1/nope | grep -q '"code":"not_found"'
           echo "dashboard embedded and serving"
 
   sdk-typescript:

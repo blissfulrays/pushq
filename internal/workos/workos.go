@@ -46,14 +46,18 @@ func (c *Client) base() string {
 	return DefaultBaseURL
 }
 
-// AuthorizeURL is where the browser goes to sign in with AuthKit. WorkOS
-// redirects back to redirectURI with ?code=…&state=….
-func (c *Client) AuthorizeURL(redirectURI, state string) string {
+// ProviderGitHub is WorkOS's provider name for "Continue with GitHub".
+const ProviderGitHub = "GitHubOAuth"
+
+// AuthorizeURL starts an OAuth sign-in with provider (e.g. ProviderGitHub):
+// the browser goes to the provider's consent screen, then WorkOS redirects
+// back to redirectURI with ?code=…&state=….
+func (c *Client) AuthorizeURL(redirectURI, state, provider string) string {
 	q := url.Values{
 		"client_id":     {c.ClientID},
 		"redirect_uri":  {redirectURI},
 		"response_type": {"code"},
-		"provider":      {"authkit"},
+		"provider":      {provider},
 		"state":         {state},
 	}
 	return c.base() + "/user_management/authorize?" + q.Encode()
@@ -65,8 +69,20 @@ type Error struct {
 	Code        string
 	Description string
 
-	pendingToken string   // organization_selection_required
+	pendingToken string   // organization_selection_required, email_verification_required
 	orgIDs       []string // organization_selection_required
+	email        string   // email_verification_required
+}
+
+// PendingEmailVerification reports an email_verification_required sign-in:
+// WorkOS has emailed the person a code, and the sign-in finishes with
+// AuthenticateEmailVerification(code, token).
+func PendingEmailVerification(err error) (token, email string, ok bool) {
+	var e *Error
+	if errors.As(err, &e) && e.Code == "email_verification_required" && e.pendingToken != "" {
+		return e.pendingToken, e.email, true
+	}
+	return "", "", false
 }
 
 // NotFound reports a WorkOS 404 (e.g. a membership already removed there).
@@ -86,11 +102,29 @@ type AuthResult struct {
 	OrganizationID string
 }
 
-// Authenticate exchanges an authorization code for the signed-in user. When
-// WorkOS needs an organization picked first (the user belongs to several),
-// it completes the sign-in for the first one; pushq switches teams itself.
+// Authenticate exchanges an OAuth authorization code for the signed-in user.
 func (c *Client) Authenticate(ctx context.Context, code string) (AuthResult, error) {
-	res, err := c.authenticate(ctx, map[string]string{"grant_type": "authorization_code", "code": code})
+	return c.authenticateGrant(ctx, map[string]string{"grant_type": "authorization_code", "code": code})
+}
+
+// AuthenticateMagicCode signs someone in with the 6-digit code emailed by
+// SendMagicCode.
+func (c *Client) AuthenticateMagicCode(ctx context.Context, email, code, ip, userAgent string) (AuthResult, error) {
+	g := map[string]string{"grant_type": "urn:workos:oauth:grant-type:magic-auth:code", "email": email, "code": code}
+	if ip != "" {
+		g["ip_address"] = ip
+	}
+	if userAgent != "" {
+		g["user_agent"] = userAgent
+	}
+	return c.authenticateGrant(ctx, g)
+}
+
+// authenticateGrant runs one authenticate grant. When WorkOS needs an
+// organization picked first (the user belongs to several), it completes the
+// sign-in for the first one; pushq switches teams itself.
+func (c *Client) authenticateGrant(ctx context.Context, grant map[string]string) (AuthResult, error) {
+	res, err := c.authenticate(ctx, grant)
 	var se *Error
 	if errors.As(err, &se) && se.Code == "organization_selection_required" && se.pendingToken != "" && len(se.orgIDs) > 0 {
 		return c.authenticate(ctx, map[string]string{
@@ -143,6 +177,56 @@ func (c *Client) UpdateOrganization(ctx context.Context, id, name string) (Organ
 	var o Organization
 	err := c.call(ctx, http.MethodPut, "/organizations/"+url.PathEscape(id), map[string]any{"name": name}, &o, true)
 	return o, err
+}
+
+// AuthenticateEmailVerification finishes a sign-in that was paused for email
+// verification, using the code WorkOS emailed.
+func (c *Client) AuthenticateEmailVerification(ctx context.Context, code, pendingToken string) (AuthResult, error) {
+	return c.authenticateGrant(ctx, map[string]string{
+		"grant_type":                   "urn:workos:oauth:grant-type:email-verification:code",
+		"code":                         code,
+		"pending_authentication_token": pendingToken,
+	})
+}
+
+// SendMagicCode has WorkOS email a one-time 6-digit sign-in code (valid 10 minutes).
+func (c *Client) SendMagicCode(ctx context.Context, email, ip, userAgent string) error {
+	body := map[string]any{"email": email}
+	if ip != "" {
+		body["ip_address"] = ip
+	}
+	if userAgent != "" {
+		body["user_agent"] = userAgent
+	}
+	return c.call(ctx, http.MethodPost, "/user_management/magic_auth", body, nil, true)
+}
+
+// FindUserByEmail looks a WorkOS user up by email.
+func (c *Client) FindUserByEmail(ctx context.Context, email string) (User, bool, error) {
+	var out struct {
+		Data []User `json:"data"`
+	}
+	q := url.Values{"email": {email}, "limit": {"1"}}
+	if err := c.call(ctx, http.MethodGet, "/user_management/users?"+q.Encode(), nil, &out, true); err != nil {
+		return User{}, false, err
+	}
+	if len(out.Data) == 0 {
+		return User{}, false, nil
+	}
+	return out.Data[0], true, nil
+}
+
+// CreateUser creates a WorkOS user with an unverified email (signing in with
+// the emailed code is what proves ownership).
+func (c *Client) CreateUser(ctx context.Context, email string) (User, error) {
+	var u User
+	err := c.call(ctx, http.MethodPost, "/user_management/users", map[string]any{"email": email, "email_verified": false}, &u, true)
+	return u, err
+}
+
+// MarkEmailVerified records that the user proved they own their email.
+func (c *Client) MarkEmailVerified(ctx context.Context, userID string) error {
+	return c.call(ctx, http.MethodPut, "/user_management/users/"+url.PathEscape(userID), map[string]any{"email_verified": true}, nil, true)
 }
 
 func (c *Client) GetUser(ctx context.Context, id string) (User, error) {
@@ -298,13 +382,14 @@ func (c *Client) call(ctx context.Context, method, path string, body, out any, b
 			Description  string `json:"error_description"`
 			Message      string `json:"message"`
 			PendingToken string `json:"pending_authentication_token"`
+			Email        string `json:"email"`
 			Orgs         []struct {
 				ID string `json:"id"`
 			} `json:"organizations"`
 		}
 		_ = json.Unmarshal(raw, &e)
 		werr := &Error{Status: resp.StatusCode, Code: firstNonEmpty(e.Code, e.Error, "request_failed"),
-			Description: firstNonEmpty(e.Description, e.Message), pendingToken: e.PendingToken}
+			Description: firstNonEmpty(e.Description, e.Message), pendingToken: e.PendingToken, email: e.Email}
 		for _, o := range e.Orgs {
 			werr.orgIDs = append(werr.orgIDs, o.ID)
 		}

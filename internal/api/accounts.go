@@ -97,7 +97,45 @@ type sessionResponse struct {
 // invitePath is the dashboard route that accepts invite and reset links. The
 // token rides in the fragment so it never reaches server logs or Referer
 // headers.
-func invitePath(token string) string { return "/ui/invite#token=" + token }
+func invitePath(token string) string { return "/invite#token=" + token }
+
+// Response envelopes. Named types (not ad-hoc maps) so the generated OpenAPI
+// spec describes exactly what is sent.
+type userEnvelope struct {
+	User userDTO `json:"user"`
+}
+
+type usersList struct {
+	Users []userDTO `json:"users"`
+}
+
+type resetLinkCreated struct {
+	Link inviteDTO `json:"link"`
+	// Path is the single-use link, relative to the server ("/invite#token=…").
+	Path string `json:"path" doc:"Single-use link relative to the server, e.g. /invite#token=…"`
+}
+
+type invitesList struct {
+	Invites []inviteDTO `json:"invites"`
+}
+
+type inviteCreated struct {
+	Invite inviteDTO `json:"invite"`
+	// Path is set on self-hosted servers: a link for you to send.
+	Path string `json:"path,omitempty" doc:"Self-hosted: the invite link to send (relative to the server)."`
+	// Emailed is set in SaaS mode, where WorkOS emails the invitation.
+	Emailed bool `json:"emailed,omitempty" doc:"SaaS mode: the invitation was emailed."`
+}
+
+type keysList struct {
+	Keys       []keyDTO `json:"keys"`
+	ConfigKeys int      `json:"config_keys" doc:"How many more keys are defined in the server config file."`
+}
+
+type keyCreated struct {
+	Key    keyDTO `json:"key"`
+	Secret string `json:"secret" doc:"The API key itself. Shown only once; store it now."`
+}
 
 // --- cookies & rate limiting ---
 
@@ -232,6 +270,30 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+type mePatchBody struct {
+	Name *string `json:"name"`
+}
+
+type passwordChangeBody struct {
+	Current string `json:"current_password"`
+	New     string `json:"new_password" doc:"At least 8 characters."`
+}
+
+type userPatchBody struct {
+	Name *string        `json:"name" doc:"Self-hosted only; in SaaS mode names come from WorkOS."`
+	Role *accounts.Role `json:"role" enum:"admin,member,viewer"`
+}
+
+type inviteCreateBody struct {
+	Email string        `json:"email"`
+	Role  accounts.Role `json:"role" enum:"admin,member,viewer"`
+}
+
+type keyCreateBody struct {
+	Name string           `json:"name" doc:"What uses the key, e.g. billing-service."`
+	Role accounts.KeyRole `json:"role" enum:"admin,writer"`
+}
+
 type credentialsBody struct {
 	Email    string `json:"email"`
 	Name     string `json:"name"`
@@ -246,7 +308,7 @@ func (s *Server) signIn(w http.ResponseWriter, r *http.Request, u accounts.User,
 		return
 	}
 	setSessionCookie(w, r, token, expires)
-	writeJSON(w, status, map[string]any{"user": toUserDTO(u)})
+	writeJSON(w, status, userEnvelope{User: toUserDTO(u)})
 }
 
 // handleSetup creates the first admin account. Allowed only while no account
@@ -341,9 +403,7 @@ func (s *Server) handleInviteAccept(w http.ResponseWriter, r *http.Request) {
 // --- own account ---
 
 func (s *Server) handleMePatch(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Name *string `json:"name"`
-	}
+	var body mePatchBody
 	if err := s.decodeJSON(w, r, &body, 16<<10); err != nil {
 		s.writeErr(w, r, err)
 		return
@@ -360,10 +420,7 @@ func (s *Server) handleMePassword(w http.ResponseWriter, r *http.Request) {
 	if !s.selfHostedOnly(w, r) || s.rateLimited(w, r) {
 		return
 	}
-	var body struct {
-		Current string `json:"current_password"`
-		New     string `json:"new_password"`
-	}
+	var body passwordChangeBody
 	if err := s.decodeJSON(w, r, &body, 16<<10); err != nil {
 		s.writeErr(w, r, err)
 		return
@@ -392,7 +449,7 @@ func (s *Server) handleUserList(w http.ResponseWriter, r *http.Request) {
 	for i, u := range users {
 		out[i] = toUserDTO(u)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"users": out})
+	writeJSON(w, http.StatusOK, usersList{Users: out})
 }
 
 func (s *Server) handleUserPatch(w http.ResponseWriter, r *http.Request) {
@@ -401,10 +458,7 @@ func (s *Server) handleUserPatch(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, r, err)
 		return
 	}
-	var body struct {
-		Name *string        `json:"name"`
-		Role *accounts.Role `json:"role"`
-	}
+	var body userPatchBody
 	if err := s.decodeJSON(w, r, &body, 16<<10); err != nil {
 		s.writeErr(w, r, err)
 		return
@@ -452,7 +506,7 @@ func (s *Server) handleUserResetLink(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{"link": toInviteDTO(inv), "path": invitePath(token)})
+	writeJSON(w, http.StatusCreated, resetLinkCreated{Link: toInviteDTO(inv), Path: invitePath(token)})
 }
 
 func (s *Server) handleInviteList(w http.ResponseWriter, r *http.Request) {
@@ -469,14 +523,11 @@ func (s *Server) handleInviteList(w http.ResponseWriter, r *http.Request) {
 	for i, inv := range invs {
 		out[i] = toInviteDTO(inv)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"invites": out})
+	writeJSON(w, http.StatusOK, invitesList{Invites: out})
 }
 
 func (s *Server) handleInviteCreate(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Email string        `json:"email"`
-		Role  accounts.Role `json:"role"`
-	}
+	var body inviteCreateBody
 	if err := s.decodeJSON(w, r, &body, 16<<10); err != nil {
 		s.writeErr(w, r, err)
 		return
@@ -490,7 +541,7 @@ func (s *Server) handleInviteCreate(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{"invite": toInviteDTO(inv), "path": invitePath(token)})
+	writeJSON(w, http.StatusCreated, inviteCreated{Invite: toInviteDTO(inv), Path: invitePath(token)})
 }
 
 func (s *Server) handleInviteDelete(w http.ResponseWriter, r *http.Request) {
@@ -526,14 +577,11 @@ func (s *Server) handleKeyList(w http.ResponseWriter, r *http.Request) {
 	if s.saas() {
 		cfgKeys = 0 // the operator's keys aren't the team's business
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"keys": out, "config_keys": cfgKeys})
+	writeJSON(w, http.StatusOK, keysList{Keys: out, ConfigKeys: cfgKeys})
 }
 
 func (s *Server) handleKeyCreate(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Name string           `json:"name"`
-		Role accounts.KeyRole `json:"role"`
-	}
+	var body keyCreateBody
 	if err := s.decodeJSON(w, r, &body, 16<<10); err != nil {
 		s.writeErr(w, r, err)
 		return
@@ -546,7 +594,7 @@ func (s *Server) handleKeyCreate(w http.ResponseWriter, r *http.Request) {
 	if p := principal(r); p.User != nil {
 		k.CreatedByEmail = p.User.Email
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{"key": toKeyDTO(k), "secret": secret})
+	writeJSON(w, http.StatusCreated, keyCreated{Key: toKeyDTO(k), Secret: secret})
 }
 
 func (s *Server) handleKeyDelete(w http.ResponseWriter, r *http.Request) {

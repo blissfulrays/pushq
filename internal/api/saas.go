@@ -18,6 +18,14 @@ import (
 // organization (and sends invite emails); pushq keeps the roles and mirrors
 // memberships locally, re-syncing at sign-in and whenever the team page loads.
 
+type teamNameBody struct {
+	Name string `json:"name" doc:"1-100 characters."`
+}
+
+type teamsList struct {
+	Teams []teamDTO `json:"teams"`
+}
+
 type teamDTO struct {
 	ID   int64  `json:"id"`
 	Name string `json:"name"`
@@ -135,7 +143,7 @@ func (s *Server) handleTeamsList(w http.ResponseWriter, r *http.Request) {
 	for i, t := range teams {
 		out[i] = teamDTO{ID: t.Team.ID, Name: t.Team.Name, Role: string(t.Role)}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"teams": out})
+	writeJSON(w, http.StatusOK, teamsList{Teams: out})
 }
 
 // handleTeamCreate creates a WorkOS Organization with the caller as admin,
@@ -144,9 +152,7 @@ func (s *Server) handleTeamCreate(w http.ResponseWriter, r *http.Request) {
 	if !s.saasOr404(w, r) {
 		return
 	}
-	var body struct {
-		Name string `json:"name"`
-	}
+	var body teamNameBody
 	if err := s.decodeJSON(w, r, &body, 16<<10); err != nil {
 		s.writeErr(w, r, err)
 		return
@@ -217,9 +223,7 @@ func (s *Server) handleTeamRename(w http.ResponseWriter, r *http.Request) {
 	if !s.saasOr404(w, r) {
 		return
 	}
-	var body struct {
-		Name string `json:"name"`
-	}
+	var body teamNameBody
 	if err := s.decodeJSON(w, r, &body, 16<<10); err != nil {
 		s.writeErr(w, r, err)
 		return
@@ -311,7 +315,7 @@ func (s *Server) saasUserList(w http.ResponseWriter, r *http.Request) {
 	for i, m := range members {
 		out[i] = toUserDTO(m.User)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"users": out})
+	writeJSON(w, http.StatusOK, usersList{Users: out})
 }
 
 func (s *Server) saasUserPatch(w http.ResponseWriter, r *http.Request, id int64, role *accounts.Role) {
@@ -391,7 +395,7 @@ func (s *Server) saasInviteList(w http.ResponseWriter, r *http.Request) {
 				CreatedAt: inv.CreatedAt, ExpiresAt: inv.ExpiresAt})
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"invites": out})
+	writeJSON(w, http.StatusOK, invitesList{Invites: out})
 }
 
 func (s *Server) saasInviteCreate(w http.ResponseWriter, r *http.Request, email string, role accounts.Role) {
@@ -423,8 +427,8 @@ func (s *Server) saasInviteCreate(w http.ResponseWriter, r *http.Request, email 
 		return
 	}
 	// No link to hand out: WorkOS emails the invitation.
-	writeJSON(w, http.StatusCreated, map[string]any{"invite": inviteDTO{ID: ti.ID, Kind: "invite", Email: ti.Email,
-		Role: string(ti.Role), CreatedAt: ti.CreatedAt, ExpiresAt: ti.ExpiresAt}, "emailed": true})
+	writeJSON(w, http.StatusCreated, inviteCreated{Invite: inviteDTO{ID: ti.ID, Kind: "invite", Email: ti.Email,
+		Role: string(ti.Role), CreatedAt: ti.CreatedAt, ExpiresAt: ti.ExpiresAt}, Emailed: true})
 }
 
 func (s *Server) saasInviteDelete(w http.ResponseWriter, r *http.Request, id int64) {

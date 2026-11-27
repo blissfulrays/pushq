@@ -198,16 +198,31 @@ export interface ApiKey {
 	last_used_at?: string;
 }
 
-/** Turns a server-relative "/ui/invite#token=…" path into a full link. */
+/** Turns a server-relative "/invite#token=…" path into a full link. */
 export function absoluteLink(path: string): string {
 	return `${window.location.origin}${path}`;
 }
 
-/** Where SaaS sign-in starts (a full-page navigation to WorkOS). */
-export function workosLoginUrl(next?: string): string {
-	const q = next ? `?next=${encodeURIComponent(next)}` : '';
-	return `${window.location.origin}/v1/auth/workos/login${q}`;
+/** "Continue with GitHub": a full-page navigation to GitHub's consent screen. */
+export function githubLoginUrl(next?: string): string {
+	const q = new URLSearchParams({ provider: 'github' });
+	if (next) q.set('next', next);
+	return `${window.location.origin}/v1/auth/workos/login?${q}`;
 }
+
+/** A sign-in WorkOS paused until the person enters the verification code it emailed. */
+export const emailVerifyApi = {
+	pending: () => request<{ pending: boolean; email?: string }>('/v1/auth/email-verification'),
+	submit: (code: string) =>
+		request<{ user: User; next?: string }>('/v1/auth/email-verification', json('POST', { code }))
+};
+
+/** SaaS passwordless sign-in: email a 6-digit code, then sign in with it. */
+export const emailCodeApi = {
+	send: (email: string) => request<{ sent: boolean }>('/v1/auth/email-code', json('POST', { email })),
+	verify: (email: string, code: string) =>
+		request<{ user: User }>('/v1/auth/email-code:verify', json('POST', { email, code }))
+};
 
 export const teamsApi = {
 	list: () => request<{ teams: { id: number; name: string; role: Role }[] }>('/v1/teams'),

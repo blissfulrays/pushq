@@ -32,7 +32,7 @@ func devCmd() *cobra.Command {
 
 			fmt.Printf(`pushq dev server
   API        http://localhost%s/v1
-  dashboard  http://localhost%s/ui/
+  dashboard  http://localhost%s/
   metrics    http://localhost%s/metrics
   db         %s
   auth       disabled (dev mode)

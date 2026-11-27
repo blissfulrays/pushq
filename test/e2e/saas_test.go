@@ -76,7 +76,7 @@ func (e *saasEnv) signIn(t *testing.T, code string) *client {
 	c := newClient(t, e.base)
 	c.http.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 
-	resp, err := c.http.Get(e.base + "/v1/auth/workos/login?next=/ui/queues")
+	resp, err := c.http.Get(e.base + "/v1/auth/workos/login?provider=github&next=/queues")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func (e *saasEnv) signIn(t *testing.T, code string) *client {
 	if err != nil || resp.StatusCode != http.StatusFound || !strings.HasPrefix(loc.String(), e.fake.URL+"/user_management/authorize") {
 		t.Fatalf("login redirect: %d %q", resp.StatusCode, resp.Header.Get("Location"))
 	}
-	if loc.Query().Get("client_id") != "client_test" || loc.Query().Get("provider") != "authkit" {
+	if loc.Query().Get("client_id") != "client_test" || loc.Query().Get("provider") != "GitHubOAuth" {
 		t.Fatalf("authorize URL: %s", loc)
 	}
 
@@ -95,7 +95,7 @@ func (e *saasEnv) signIn(t *testing.T, code string) *client {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
-	if got := resp.Header.Get("Location"); resp.StatusCode != http.StatusFound || got != "/ui/queues" {
+	if got := resp.Header.Get("Location"); resp.StatusCode != http.StatusFound || got != "/queues" {
 		t.Fatalf("callback: %d -> %q", resp.StatusCode, got)
 	}
 	c.http.CheckRedirect = nil
@@ -120,7 +120,7 @@ func TestSaaSTeamIsolation(t *testing.T) {
 	noFollow := newClient(t, e.base)
 	noFollow.http.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	resp, _ := noFollow.http.Get(e.base + "/v1/auth/workos/callback?code=" + code + "&state=forged")
-	if loc := resp.Header.Get("Location"); !strings.HasPrefix(loc, "/ui/login?error=") {
+	if loc := resp.Header.Get("Location"); !strings.HasPrefix(loc, "/login?error=") {
 		t.Fatalf("forged callback -> %q", loc)
 	}
 	resp.Body.Close()
@@ -299,4 +299,109 @@ func TestSaaSRemembersLastTeam(t *testing.T) {
 	if s := d2.must("GET", "/v1/auth/session", nil, 200); s["team"].(map[string]any)["name"] != "Two" {
 		t.Fatalf("second sign-in team = %v", s["team"])
 	}
+}
+
+// Passwordless sign-in on pushq's own page: an email code signs people up and in.
+func TestSaaSEmailCodeSignIn(t *testing.T) {
+	e := newSaaSServer(t)
+	c := newClient(t, e.base)
+
+	// A brand-new email: WorkOS gets an (unverified) user and emails a code.
+	c.must("POST", "/v1/auth/email-code", map[string]any{"email": "  New.Person@Example.test "}, 200)
+	if u, ok := e.fake.userByEmail("new.person@example.test"); !ok || u.Verified {
+		t.Fatalf("expected an unverified WorkOS user, got %+v %v", u, ok)
+	}
+	code := e.fake.emailedCode("new.person@example.test")
+	if len(code) != 6 {
+		t.Fatalf("no code emailed: %q", code)
+	}
+
+	// A wrong code is refused without signing in.
+	c.must("POST", "/v1/auth/email-code:verify", map[string]any{"email": "new.person@example.test", "code": "000000"}, 401)
+	c.must("GET", "/v1/queues", nil, 401)
+
+	// The right code signs in, verifies the email, and needs a team first.
+	out := c.must("POST", "/v1/auth/email-code:verify", map[string]any{"email": "New.Person@example.test", "code": code}, 200)
+	if out["user"].(map[string]any)["email"] != "new.person@example.test" {
+		t.Fatalf("signed-in user = %v", out)
+	}
+	if u, _ := e.fake.userByEmail("new.person@example.test"); !u.Verified {
+		t.Fatal("email should be marked verified after a correct code")
+	}
+	if s := c.must("GET", "/v1/auth/session", nil, 200); s["authenticated"] != true || s["needs_team"] != true {
+		t.Fatalf("session = %v", s)
+	}
+	c.must("POST", "/v1/teams", map[string]any{"name": "Code Co"}, 201)
+	c.must("PUT", "/v1/queues/jobs", map[string]any{}, 201)
+
+	// The code is single-use; an existing user signs in again with a new one.
+	again := newClient(t, e.base)
+	again.must("POST", "/v1/auth/email-code:verify", map[string]any{"email": "new.person@example.test", "code": code}, 401)
+	again.must("POST", "/v1/auth/email-code", map[string]any{"email": "new.person@example.test"}, 200)
+	again.must("POST", "/v1/auth/email-code:verify", map[string]any{"email": "new.person@example.test", "code": e.fake.emailedCode("new.person@example.test")}, 200)
+	again.must("GET", "/v1/queues/jobs", nil, 200) // back in their team
+
+	// Requests that set a cookie need the CSRF header; junk emails are rejected.
+	bad := newClient(t, e.base)
+	bad.must("POST", "/v1/auth/email-code", map[string]any{"email": "not-an-email"}, 400)
+	bad.noCSRF = true
+	bad.must("POST", "/v1/auth/email-code", map[string]any{"email": "x@example.test"}, 403)
+
+	// Only known OAuth providers are offered.
+	nf := newClient(t, e.base)
+	nf.http.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, _ := nf.http.Get(e.base + "/v1/auth/workos/login?provider=authkit")
+	if loc := resp.Header.Get("Location"); !strings.HasPrefix(loc, "/login?error=") {
+		t.Fatalf("unknown provider -> %q", loc)
+	}
+	resp.Body.Close()
+}
+
+// WorkOS can pause a GitHub sign-in until the email is verified: pushq's own
+// page asks for the emailed code and then finishes the sign-in.
+func TestSaaSEmailVerificationRequired(t *testing.T) {
+	e := newSaaSServer(t)
+	_, code := e.fake.addUnverifiedUser("gita@example.test")
+
+	c := newClient(t, e.base)
+	c.http.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, _ := c.http.Get(e.base + "/v1/auth/workos/login?provider=github&next=/queues")
+	resp.Body.Close()
+	loc, _ := url.Parse(resp.Header.Get("Location"))
+	resp, _ = c.http.Get(e.base + "/v1/auth/workos/callback?code=" + code + "&state=" + url.QueryEscape(loc.Query().Get("state")))
+	resp.Body.Close()
+	if got := resp.Header.Get("Location"); got != "/login?verify=1" {
+		t.Fatalf("callback -> %q, want the verify step", got)
+	}
+	c.http.CheckRedirect = nil
+
+	if p := c.must("GET", "/v1/auth/email-verification", nil, 200); p["pending"] != true || p["email"] != "gita@example.test" {
+		t.Fatalf("pending verification = %v", p)
+	}
+	c.must("GET", "/v1/queues", nil, 401) // not signed in yet
+	c.must("POST", "/v1/auth/email-verification", map[string]any{"code": "000000"}, 401)
+
+	out := c.must("POST", "/v1/auth/email-verification", map[string]any{"code": e.fake.verificationCode()}, 200)
+	if out["next"] != "/queues" || out["user"].(map[string]any)["email"] != "gita@example.test" {
+		t.Fatalf("verify result = %v", out)
+	}
+	if s := c.must("GET", "/v1/auth/session", nil, 200); s["authenticated"] != true || s["needs_team"] != true {
+		t.Fatalf("session after verification = %v", s)
+	}
+	// The pending sign-in is single use.
+	c.must("POST", "/v1/auth/email-verification", map[string]any{"code": "123456"}, 400)
+	newClient(t, e.base).must("POST", "/v1/auth/email-verification", map[string]any{"code": "123456"}, 400)
+}
+
+// With WorkOS's email verification turned off, a GitHub sign-in whose email
+// WorkOS hasn't verified goes straight in (no code step).
+func TestSaaSGitHubWithoutEmailVerification(t *testing.T) {
+	e := newSaaSServer(t)
+	e.fake.skipVerification = true
+	_, code := e.fake.addUnverifiedUser("gh@example.test")
+	c := e.signIn(t, code) // fails the test unless the callback lands on /queues
+	if s := c.must("GET", "/v1/auth/session", nil, 200); s["authenticated"] != true || s["user"].(map[string]any)["email"] != "gh@example.test" {
+		t.Fatalf("session = %v", s)
+	}
+	c.must("POST", "/v1/teams", map[string]any{"name": "GH"}, 201)
 }
