@@ -165,7 +165,9 @@ jobs:
       # pins the bytecode level, rather than it passing only because the
       # build JDK happens to be 11.
       - uses: actions/setup-java@v4
-        with: { distribution: temurin, java-version: "21" }
+        # Cache ~/.m2 so every run doesn't re-download all plugins from
+        # Maven Central, which rate-limits (429) GitHub's shared runner IPs.
+        with: { distribution: temurin, java-version: "21", cache: maven }
       - run: cd sdks/java && mvn -q --batch-mode package
       # Exercise the release profile (sources + javadoc jars) on every PR.
       # Javadoc errors are otherwise only discovered on release day.
