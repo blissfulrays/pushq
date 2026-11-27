@@ -35,7 +35,8 @@ changelog:
     exclude: ["^docs:", "^test:", "^chore:"]
 
 release:
-  draft: true
+  # Published straight away: releases are cut automatically on merge to main.
+  draft: false
   # Tags like v0.1.0-beta.1 are flagged as prereleases on GitHub, so they
   # don't show up as the project's "Latest release".
   prerelease: auto

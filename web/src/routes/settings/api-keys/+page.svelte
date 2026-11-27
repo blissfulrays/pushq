@@ -9,9 +9,18 @@
 	import CopyField from '$lib/components/CopyField.svelte';
 	import ErrorAlert from '$lib/components/ErrorAlert.svelte';
 	import TimeStamp from '$lib/components/TimeStamp.svelte';
+	import Pager from '$lib/components/Pager.svelte';
+	import { paginate, storedPageSize } from '$lib/pagination';
 
 	let keys = $state<ApiKey[] | null>(null);
 	let configKeys = $state(0);
+
+	let page = $state(1);
+	let pageSize = $state(storedPageSize('api-keys', 25));
+	const paged = $derived(paginate(keys ?? [], page, pageSize));
+	$effect(() => {
+		if (page !== paged.page) page = paged.page;
+	});
 	let error = $state<string | null>(null);
 
 	let name = $state('');
@@ -125,7 +134,7 @@
 						<Table.Cell colspan={6} class="h-16 text-center text-muted-foreground">No keys created in the dashboard yet.</Table.Cell>
 					</Table.Row>
 				{:else}
-					{#each keys as k (k.id)}
+					{#each paged.rows as k (k.id)}
 						<Table.Row>
 							<Table.Cell class="font-medium">{k.name}</Table.Cell>
 							<Table.Cell class="font-mono text-xs text-muted-foreground">{k.prefix}…</Table.Cell>
@@ -153,6 +162,18 @@
 			</Table.Body>
 		</Table.Root>
 	</div>
+
+	{#if keys && keys.length > 0}
+		<Pager
+			bind:page
+			bind:pageSize
+			total={paged.total}
+			from={paged.from}
+			to={paged.to}
+			storageKey="api-keys"
+			noun="keys"
+		/>
+	{/if}
 
 	{#if configKeys > 0}
 		<p class="text-xs text-muted-foreground">

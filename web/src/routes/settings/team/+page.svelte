@@ -10,6 +10,8 @@
 	import CopyField from '$lib/components/CopyField.svelte';
 	import ErrorAlert from '$lib/components/ErrorAlert.svelte';
 	import TimeStamp from '$lib/components/TimeStamp.svelte';
+	import Pager from '$lib/components/Pager.svelte';
+	import { paginate, storedPageSize } from '$lib/pagination';
 
 	const roles: { value: Role; label: string; hint: string }[] = [
 		{ value: 'admin', label: 'Admin', hint: 'Everything, including team and API keys' },
@@ -19,6 +21,18 @@
 
 	let users = $state<User[] | null>(null);
 	let invites = $state<Invite[]>([]);
+
+	let userPage = $state(1);
+	let userPageSize = $state(storedPageSize('team', 25));
+	const pagedUsers = $derived(paginate(users ?? [], userPage, userPageSize));
+	let invitePage = $state(1);
+	let invitePageSize = $state(storedPageSize('invites', 10));
+	const pagedInvites = $derived(paginate(invites, invitePage, invitePageSize));
+	// Keep pages in range when people are removed or invites revoked.
+	$effect(() => {
+		if (userPage !== pagedUsers.page) userPage = pagedUsers.page;
+		if (invitePage !== pagedInvites.page) invitePage = pagedInvites.page;
+	});
 	let error = $state<string | null>(null);
 
 	let inviteEmail = $state('');
@@ -175,7 +189,7 @@
 				{#if users === null}
 					<Table.Row><Table.Cell colspan={4} class="h-16 text-center text-muted-foreground">Loading…</Table.Cell></Table.Row>
 				{:else}
-					{#each users as u (u.id)}
+					{#each pagedUsers.rows as u (u.id)}
 						<Table.Row>
 							<Table.Cell>
 								<p class="font-medium">
@@ -217,6 +231,17 @@
 			</Table.Body>
 		</Table.Root>
 	</div>
+	{#if users && users.length > 0}
+		<Pager
+			bind:page={userPage}
+			bind:pageSize={userPageSize}
+			total={pagedUsers.total}
+			from={pagedUsers.from}
+			to={pagedUsers.to}
+			storageKey="team"
+			noun="members"
+		/>
+	{/if}
 
 	{#if invites.length > 0}
 		<div class="space-y-2">
@@ -224,7 +249,7 @@
 			<div class="rounded-xl border">
 				<Table.Root>
 					<Table.Body>
-						{#each invites as inv (inv.id)}
+						{#each pagedInvites.rows as inv (inv.id)}
 							<Table.Row>
 								<Table.Cell class="font-medium">{inv.email}</Table.Cell>
 								<Table.Cell class="capitalize text-muted-foreground">{inv.role}</Table.Cell>
@@ -239,6 +264,15 @@
 					</Table.Body>
 				</Table.Root>
 			</div>
+			<Pager
+				bind:page={invitePage}
+				bind:pageSize={invitePageSize}
+				total={pagedInvites.total}
+				from={pagedInvites.from}
+				to={pagedInvites.to}
+				storageKey="invites"
+				noun="invites"
+			/>
 		</div>
 	{/if}
 </div>

@@ -85,8 +85,12 @@ jobs:
       - run: cd sdks/typescript && PUSHQ_BIN=$GITHUB_WORKSPACE/pushq npm test
 
   sdk-python:
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest (26.04) has no Python 3.9 builds, and the SDK
+    # still supports 3.9. Move to ubuntu-latest when 3.9 support is dropped.
+    runs-on: ubuntu-24.04
     strategy:
+      # One interpreter failing shouldn't hide results for the others.
+      fail-fast: false
       matrix:
         # Must cover the full range advertised in pyproject's
         # requires-python and classifiers.
