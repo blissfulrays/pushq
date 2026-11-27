@@ -30,13 +30,14 @@ failed CI run on `main` never releases.
 |---|---|---|---|
 | Binaries | GitHub Releases | none (built-in token) | — |
 | Docker | ghcr.io | none (built-in token) | — |
-| TypeScript | npm | `NPM_TOKEN` secret | yes |
+| TypeScript | npm | Trusted Publishing (or `NPM_TOKEN` fallback) | no — fails loudly |
 | Python | PyPI | Trusted Publishing (no secret) | no — fails loudly |
 | Java | Maven Central | 4 secrets (see below) | yes |
 | Go | none — just a git tag | none | — |
 
-You can enable registries one at a time; a job whose credentials are missing
-skips instead of failing the release.
+Maven skips itself until its secrets exist. npm and PyPI always try to
+publish and fail loudly when their trusted publisher isn't set up: a silent
+skip would look exactly like a release that quietly shipped nothing.
 
 ---
 
@@ -64,23 +65,37 @@ communicates "not stable yet" in every ecosystem's conventions.
 
 ### npm (TypeScript SDK)
 
-1. Create an account at npmjs.com, enable 2FA.
-2. Access Tokens → **Generate New Token → Granular Access Token**:
-   - Packages and scopes: **Read and write**
-   - Since `pushq` doesn't exist yet, scope it to "All packages" for the first
-     publish, then narrow it to just `pushq` afterwards.
-   - Set an expiry you'll actually remember to rotate (90 days is fine).
-3. GitHub repo → Settings → Secrets and variables → Actions → **New repository
-   secret**: name `NPM_TOKEN`, value the token.
+npm uses **Trusted Publishing**, like PyPI: GitHub proves the workflow's
+identity with a short-lived OIDC token, so there's no npm token to store or
+rotate. A token that expires (granular tokens last at most 90 days) silently
+breaks every automatic release; that's how `0.1.0-beta.5` missed npm.
 
-The workflow publishes with `--provenance`, which cryptographically links the
-package to this repo and the exact workflow run — npm shows a "Built and signed
-on GitHub Actions" badge. It needs `id-token: write` permission (already set)
-and the `repository` field in `package.json` (already set).
+1. Sign in at npmjs.com as an owner of `pushq`.
+2. Package **pushq → Settings → Trusted Publisher → GitHub Actions**:
+   - Organization or user: `blissfulrays`
+   - Repository: `pushq`
+   - Workflow filename: `release.yml`
+   - Environment: leave empty
+3. Re-run the release (see below). Once a publish succeeds, delete the
+   `NPM_TOKEN` repository secret. Optionally set the package's *Publishing
+   access* to "Require two-factor authentication and disallow tokens", which
+   leaves Trusted Publishing as the only way in.
 
-> If your npm account enforces 2FA for publishing, set the token type to
-> "Automation" (or allow token-based publish), otherwise CI publishes get
-> blocked on an OTP prompt.
+Packages published this way get provenance automatically: npm shows a "Built
+and signed on GitHub Actions" badge linking to the exact workflow run.
+
+**Fallback:** until Trusted Publishing is set up, the job uses the `NPM_TOKEN`
+secret (a granular access token with read and write on `pushq`). npm reports an
+expired or wrong token as `E404 Not Found - PUT https://registry.npmjs.org/pushq`.
+
+### Re-running a release
+
+If one registry failed (say npm), fix its credentials and run the *release*
+workflow by hand with the **same version**, e.g. `0.1.0-beta.5`. It rebuilds
+from that version's tagged commit, and anything already published (the GitHub
+release and binaries, the npm version, PyPI files, the Go tag) is skipped.
+Docker re-pushes the same image tag. For a single failed job you can also use
+*Re-run failed jobs* on the original run.
 
 ### PyPI (Python SDK)
 
