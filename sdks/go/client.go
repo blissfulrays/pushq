@@ -49,6 +49,10 @@ func asErr(err error, target **Error) bool {
 	return false
 }
 
+// DefaultBaseURL is the hosted pushq API, used when New is given an empty
+// base URL. Pass your own server's URL to use a self-hosted pushq.
+const DefaultBaseURL = "https://api.pushqueue.dev"
+
 type Client struct {
 	baseURL string
 	apiKey  string
@@ -59,7 +63,12 @@ type Option func(*Client)
 
 func WithHTTPClient(h *http.Client) Option { return func(c *Client) { c.http = h } }
 
+// New returns a client for baseURL, e.g. "http://localhost:8080" for a
+// self-hosted server. An empty baseURL means the hosted API (DefaultBaseURL).
 func New(baseURL, apiKey string, opts ...Option) *Client {
+	if strings.TrimSpace(baseURL) == "" {
+		baseURL = DefaultBaseURL
+	}
 	c := &Client{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		apiKey:  apiKey,

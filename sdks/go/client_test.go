@@ -88,3 +88,12 @@ func TestClientPathsAndErrors(t *testing.T) {
 		t.Fatalf("task wire: %v", gotBody)
 	}
 }
+
+func TestDefaultBaseURL(t *testing.T) {
+	if got := New("", "k").baseURL; got != DefaultBaseURL {
+		t.Errorf("New(\"\") base = %q, want %q", got, DefaultBaseURL)
+	}
+	if got := New("http://localhost:8080/", "k").baseURL; got != "http://localhost:8080" {
+		t.Errorf("explicit base = %q", got)
+	}
+}

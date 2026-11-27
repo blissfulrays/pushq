@@ -35,8 +35,11 @@ namespace Pushq
     /// <summary>Options for <see cref="PushqClient"/>.</summary>
     public sealed class PushqClientOptions
     {
-        /// <summary>Server URL, e.g. "http://localhost:8080".</summary>
-        public string BaseUrl { get; set; } = "";
+        /// <summary>
+        /// Server URL, e.g. "http://localhost:8080" when self-hosting. Defaults to
+        /// the hosted API, <see cref="PushqClient.DefaultBaseUrl"/>.
+        /// </summary>
+        public string BaseUrl { get; set; } = PushqClient.DefaultBaseUrl;
         /// <summary>API key sent as a bearer token. Null against an unauthenticated dev server.</summary>
         public string? ApiKey { get; set; }
         /// <summary>Per-request timeout. Default 30 seconds. Ignored when <see cref="HttpClient"/> is supplied.</summary>
@@ -53,7 +56,7 @@ namespace Pushq
     /// </summary>
     /// <example>
     /// <code>
-    /// using var pushq = new PushqClient("http://localhost:8080", apiKey: "pq_…");
+    /// using var pushq = new PushqClient(apiKey: "pq_…"); // hosted API; or pass your server's URL first
     /// await pushq.UpsertQueueAsync("emails", new QueueConfig {
     ///     RateLimits = new RateLimits { MaxDispatchesPerSecond = 50 },
     ///     Target = new Target { BaseUrl = "https://api.example.com" },
@@ -70,9 +73,15 @@ namespace Pushq
         private readonly string _base;
         private readonly string? _apiKey;
 
-        /// <summary>Creates a client for <paramref name="baseUrl"/>.</summary>
-        public PushqClient(string baseUrl, string? apiKey = null)
-            : this(new PushqClientOptions { BaseUrl = baseUrl, ApiKey = apiKey })
+        /// <summary>The hosted pushq API, used when no base URL is given.</summary>
+        public const string DefaultBaseUrl = "https://api.pushqueue.dev";
+
+        /// <summary>
+        /// Creates a client for <paramref name="baseUrl"/>, or for the hosted API
+        /// (<see cref="DefaultBaseUrl"/>) when it is null or empty.
+        /// </summary>
+        public PushqClient(string? baseUrl = null, string? apiKey = null)
+            : this(new PushqClientOptions { BaseUrl = baseUrl ?? DefaultBaseUrl, ApiKey = apiKey })
         {
         }
 
@@ -80,8 +89,7 @@ namespace Pushq
         public PushqClient(PushqClientOptions options)
         {
             if (options == null) throw new ArgumentNullException(nameof(options));
-            if (string.IsNullOrWhiteSpace(options.BaseUrl)) throw new ArgumentException("BaseUrl is required", nameof(options));
-            _base = options.BaseUrl.TrimEnd('/');
+            _base = (string.IsNullOrWhiteSpace(options.BaseUrl) ? DefaultBaseUrl : options.BaseUrl.Trim()).TrimEnd('/');
             _apiKey = options.ApiKey;
             if (options.HttpClient != null)
             {

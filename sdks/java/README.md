@@ -31,8 +31,10 @@ import io.pushq.*;
 import java.time.Duration;
 
 Pushq client = Pushq.builder()
-    .baseUrl("http://localhost:8080")
-    .apiKey(System.getenv("PUSHQ_API_KEY")) // omit against an unauthenticated dev server
+    .apiKey(System.getenv("PUSHQ_API_KEY"))
+    // Defaults to the hosted API (https://api.pushqueue.dev). Self-hosting?
+    // .baseUrl("http://localhost:8080")
+    // and omit the key against an unauthenticated dev server.
     .timeout(Duration.ofSeconds(10))
     .build();
 ```

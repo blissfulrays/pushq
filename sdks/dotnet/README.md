@@ -25,9 +25,11 @@ dotnet add package Pushq --prerelease
 ```csharp
 using Pushq;
 
+// Hosted API (https://api.pushqueue.dev) by default. Self-hosting? Pass your
+// server first, e.g. new PushqClient("http://localhost:8080", apiKey: ...),
+// and omit the key against `pushq dev`.
 using var pushq = new PushqClient(
-    "http://localhost:8080",
-    apiKey: Environment.GetEnvironmentVariable("PUSHQ_API_KEY")); // omit against `pushq dev`
+    apiKey: Environment.GetEnvironmentVariable("PUSHQ_API_KEY"));
 
 // Create or update a queue (idempotent; never changes its run state).
 await pushq.UpsertQueueAsync("emails", new QueueConfig
@@ -103,7 +105,7 @@ catch (PushqException e) when (e.Code == "already_exists")
 builder.Services.AddHttpClient("pushq");
 builder.Services.AddSingleton(sp => new PushqClient(new PushqClientOptions
 {
-    BaseUrl = builder.Configuration["Pushq:Url"]!,
+    BaseUrl = builder.Configuration["Pushq:Url"] ?? PushqClient.DefaultBaseUrl,
     ApiKey = builder.Configuration["Pushq:ApiKey"],
     HttpClient = sp.GetRequiredService<IHttpClientFactory>().CreateClient("pushq"),
 }));

@@ -21,8 +21,8 @@ import java.util.Objects;
  *
  * <pre>{@code
  * Pushq client = Pushq.builder()
- *     .baseUrl("http://localhost:8080")
- *     .apiKey("my-key")                 // omit against an unauthenticated dev server
+ *     .apiKey("my-key")                 // hosted API by default
+ *     .baseUrl("http://localhost:8080") // or your self-hosted server
  *     .timeout(Duration.ofSeconds(10))
  *     .build();
  * }</pre>
@@ -35,13 +35,16 @@ public final class Pushq {
 
     static final String VERSION = "0.1.0-SNAPSHOT";
 
+    /** The hosted pushq API, used when no base URL is set. */
+    public static final String DEFAULT_BASE_URL = "https://api.pushqueue.dev";
+
     private final String baseUrl;
     private final String apiKey;
     private final Duration timeout;
     private final HttpClient http;
 
     private Pushq(Builder b) {
-        String url = Objects.requireNonNull(b.baseUrl, "baseUrl is required");
+        String url = b.baseUrl == null || b.baseUrl.trim().isEmpty() ? DEFAULT_BASE_URL : b.baseUrl.trim();
         while (url.endsWith("/")) {
             url = url.substring(0, url.length() - 1);
         }
@@ -56,6 +59,11 @@ public final class Pushq {
 
     public static Builder builder() {
         return new Builder();
+    }
+
+    /** The server this client talks to, without a trailing slash. */
+    public String getBaseUrl() {
+        return baseUrl;
     }
 
     // ------------------------------------------------------------------ queues
@@ -376,7 +384,10 @@ public final class Pushq {
         private Builder() {
         }
 
-        /** Server base URL, e.g. {@code http://localhost:8080}. Required. */
+        /**
+         * Server base URL, e.g. {@code http://localhost:8080} when self-hosting.
+         * Defaults to the hosted API, {@link Pushq#DEFAULT_BASE_URL}.
+         */
         public Builder baseUrl(String baseUrl) {
             this.baseUrl = baseUrl;
             return this;
