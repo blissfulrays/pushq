@@ -81,6 +81,23 @@ volumes:
 Load-balance the two replicas however you like; `GET /readyz` tells you which
 one currently runs the dispatcher (`"role": "leader"`).
 
+## Coolify
+
+1. Add a **PostgreSQL** database (not public) and a **Docker Image** app:
+   `ghcr.io/blissfulrays/pushq:<version>`, or `:edge` to follow every release.
+2. App settings: exposed port `8080`, your domain, health check **off** (the
+   image is distroless, so Coolify's in-container curl/wget check can't run).
+3. Environment: `PUSHQ_DB=postgres://USER:PASS@<database-uuid>:5432/DB?sslmode=disable`
+   (the database's internal hostname is its Coolify UUID), plus the
+   [SaaS mode](#saas-mode-workos) variables if you want them.
+
+**Deploy every release automatically:** run the app on `:edge`, then add two
+repository secrets — `COOLIFY_WEBHOOK` (the app's Deploy Webhook URL, under
+Webhooks) and `COOLIFY_TOKEN` (an API token with the `deploy` permission).
+The release workflow calls the webhook after pushing a new `:edge` image.
+Coolify's API must be enabled (Settings → Advanced) and reachable from
+GitHub.
+
 ## Blue/green deploys
 
 1. Start the new instance (it serves the API immediately; dispatcher role is
