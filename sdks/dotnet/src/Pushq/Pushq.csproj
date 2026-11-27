@@ -1,0 +1,48 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- netstandard2.0 covers .NET Framework 4.6.2+ and every .NET Core / .NET 5+
+         release; net10.0 (LTS) gets the in-box System.Text.Json and trimming
+         annotations. Override with -p:PushqTargetFrameworks=... (e.g. local
+         builds on an older SDK). -->
+    <PushqTargetFrameworks Condition="'$(PushqTargetFrameworks)' == ''">netstandard2.0;net10.0</PushqTargetFrameworks>
+    <TargetFrameworks>$(PushqTargetFrameworks)</TargetFrameworks>
+    <LangVersion>10.0</LangVersion>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Pushq</RootNamespace>
+    <AssemblyName>Pushq</AssemblyName>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <Deterministic>true</Deterministic>
+
+    <!-- Overwritten by the release workflow (-p:Version=X.Y.Z). -->
+    <Version>0.1.0-dev</Version>
+
+    <PackageId>Pushq</PackageId>
+    <Authors>blissfulrays</Authors>
+    <Description>Official .NET client for pushq, a self-hosted HTTP push task queue (an open-source alternative to Google Cloud Tasks). Create queues with rate limits and retries, enqueue HTTP tasks, and verify signed deliveries.</Description>
+    <PackageTags>pushq;task-queue;cloud-tasks;webhooks;http;queue;background-jobs</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageProjectUrl>https://github.com/blissfulrays/pushq</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/blissfulrays/pushq</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(GITHUB_ACTIONS)' == 'true'">
+    <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.0'">
+    <PackageReference Include="System.Text.Json" Version="8.0.5" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="../../README.md" Pack="true" PackagePath="/" />
+    <None Include="../../LICENSE" Pack="true" PackagePath="/" />
+  </ItemGroup>
+
+</Project>

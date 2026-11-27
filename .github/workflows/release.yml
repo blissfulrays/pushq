@@ -1,8 +1,8 @@
 name: release
 
 # Publishes everything at one version: binaries, the Docker image, and all
-# four SDKs. npm and PyPI use Trusted Publishing; Maven skips itself until its
-# secrets exist. See docs/publishing.md.
+# five SDKs. npm, PyPI and NuGet use Trusted Publishing; Maven and NuGet skip
+# themselves until their secrets exist. See docs/publishing.md.
 #
 # Three ways in:
 #   - Merge to main (automatic): once CI passes on main, the next version is
@@ -383,6 +383,50 @@ jobs:
           MAVEN_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
           MAVEN_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
           MAVEN_GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+
+  # NuGet Trusted Publishing: NuGet/login trades GitHub's OIDC token for a
+  # short-lived API key, so there's no long-lived key to store or rotate.
+  # Skips itself until the NUGET_USER secret (the nuget.org profile name that
+  # owns the trusted publishing policy) exists.
+  nuget:
+    needs: version
+    if: needs.version.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # NuGet Trusted Publishing (OIDC)
+    env:
+      NUGET_USER: ${{ secrets.NUGET_USER }}
+    steps:
+      - name: Not configured
+        if: env.NUGET_USER == ''
+        run: echo "::notice title=NuGet skipped::Set the NUGET_USER secret and a trusted publishing policy on nuget.org (docs/publishing.md) to publish the .NET SDK."
+      - uses: actions/checkout@v4
+        if: env.NUGET_USER != ''
+        with: { ref: "${{ needs.version.outputs.sha }}" }
+      - uses: actions/setup-dotnet@v4
+        if: env.NUGET_USER != ''
+        with: { dotnet-version: "10.0.x" }
+      - name: Pack
+        if: env.NUGET_USER != ''
+        env:
+          V: ${{ needs.version.outputs.version }}
+        run: cd sdks/dotnet && dotnet pack src/Pushq -c Release -p:Version="$V" -o out
+      - name: NuGet login (OIDC)
+        if: env.NUGET_USER != ''
+        id: login
+        uses: NuGet/login@v1
+        with:
+          user: ${{ secrets.NUGET_USER }}
+      # --skip-duplicate makes re-runs safe; the matching .snupkg (symbols)
+      # is pushed alongside automatically.
+      - name: Publish
+        if: env.NUGET_USER != ''
+        env:
+          NUGET_API_KEY: ${{ steps.login.outputs.NUGET_API_KEY }}
+        run: |
+          dotnet nuget push "sdks/dotnet/out/*.nupkg" --api-key "$NUGET_API_KEY" \
+            --source https://api.nuget.org/v3/index.json --skip-duplicate
 
   # The Go SDK is a nested module: `go get .../sdks/go@vX.Y.Z` resolves the
   # tag `sdks/go/vX.Y.Z`, not the repo-root tag. Nothing to upload — the proxy

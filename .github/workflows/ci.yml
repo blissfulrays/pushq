@@ -124,6 +124,32 @@ jobs:
         with: { go-version: "1.26" }
       - run: cd sdks/go && go vet ./... && go test ./...
 
+  sdk-dotnet:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.26" }
+      - uses: actions/setup-dotnet@v4
+        with: { dotnet-version: "10.0.x" }
+      - run: go build -o pushq ./cmd/pushq
+      # Unit tests plus integration tests against the real server.
+      - run: cd sdks/dotnet && dotnet test tests/Pushq.Tests
+        env:
+          PUSHQ_BIN: ${{ github.workspace }}/pushq
+      # Pack exactly as the release does and check what consumers would get.
+      - name: Verify publishable package
+        run: |
+          cd sdks/dotnet
+          dotnet pack src/Pushq -c Release -p:Version=0.0.0-ci -o out
+          PKG=out/Pushq.0.0.0-ci.nupkg
+          LIST=$(unzip -l "$PKG")
+          for f in lib/netstandard2.0/Pushq.dll lib/netstandard2.0/Pushq.xml lib/net10.0/Pushq.dll README.md LICENSE; do
+            echo "$LIST" | grep -q " $f\$" || { echo "$f missing from package"; exit 1; }
+          done
+          test -f out/Pushq.0.0.0-ci.snupkg || { echo "symbols package missing"; exit 1; }
+          echo "package OK: netstandard2.0 + net10.0, docs, README, license, symbols"
+
   sdk-java:
     runs-on: ubuntu-latest
     steps:
