@@ -52,7 +52,7 @@ func mustTask(t *testing.T, s store.Store, nt store.NewTask, now time.Time) stor
 func claimAll(t *testing.T, s store.Store, q store.Queue, n int, now time.Time, token string) []store.Task {
 	t.Helper()
 	tasks, err := s.ClaimTasks(context.Background(), now, token, time.Minute,
-		[]store.ClaimBudget{{QueueID: q.ID, N: n, PurgedAt: q.PurgedAt}})
+		[]store.ClaimBudget{{QueueID: q.ID, N: n}})
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -344,6 +344,82 @@ func Run(t *testing.T, factory Factory) {
 		// Hard delete drops nothing extra (row already replaced) but must not error.
 		if _, err := s.HardDeletePurged(ctx, 100); err != nil {
 			t.Fatal(err)
+		}
+	})
+
+	t.Run("PurgeThenCreateSameInstant", func(t *testing.T) {
+		// A task created right after a purge — in the same clock tick, or
+		// stamped by a replica whose clock lags the purging one — must be
+		// visible and claimable, not silently hidden by the watermark.
+		s := factory(t)
+		mustQueue(t, s, "q1")
+		mustTask(t, s, newTask("q1", "before", t0), t0)
+		purgeAt := t0.Add(time.Minute)
+		if _, err := s.PurgeQueue(ctx, "q1", purgeAt); err != nil {
+			t.Fatal(err)
+		}
+		mustTask(t, s, newTask("q1", "same-tick", purgeAt), purgeAt)
+		lagging := purgeAt.Add(-30 * time.Second)
+		mustTask(t, s, newTask("q1", "lagging-clock", lagging), lagging)
+
+		for _, id := range []string{"same-tick", "lagging-clock"} {
+			if _, err := s.GetTask(ctx, "q1", id, store.ViewBasic); err != nil {
+				t.Fatalf("%s created after purge is hidden: %v", id, err)
+			}
+		}
+		q, _ := s.GetQueue(ctx, "q1")
+		if got := claimAll(t, s, q, 10, purgeAt.Add(time.Second), "tok"); len(got) != 2 {
+			t.Fatalf("claimed %d post-purge tasks, want 2", len(got))
+		}
+	})
+
+	t.Run("PurgeCoversTasksFromFastClocks", func(t *testing.T) {
+		// A task stamped by a replica whose clock runs ahead of the purging
+		// one still existed before the purge and must be purged.
+		s := factory(t)
+		mustQueue(t, s, "q1")
+		ahead := t0.Add(time.Hour)
+		mustTask(t, s, newTask("q1", "future-stamped", t0), ahead)
+		if _, err := s.PurgeQueue(ctx, "q1", t0.Add(time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.GetTask(ctx, "q1", "future-stamped", store.ViewBasic); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("task created before the purge survived it: %v", err)
+		}
+	})
+
+	t.Run("ClaimHonorsPurgeWithoutCallerState", func(t *testing.T) {
+		// Callers pass no purge watermark; the store must apply the current
+		// one even if the caller's cached queue config predates the purge.
+		s := factory(t)
+		stale := mustQueue(t, s, "q1")
+		mustTask(t, s, newTask("q1", "doomed", t0), t0)
+		if _, err := s.PurgeQueue(ctx, "q1", t0.Add(time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+		if got := claimAll(t, s, stale, 10, t0.Add(2*time.Minute), "tok"); len(got) != 0 {
+			t.Fatalf("claimed %d purged tasks", len(got))
+		}
+	})
+
+	t.Run("BatchItemFailureIsolated", func(t *testing.T) {
+		// One item the database rejects (Postgres JSONB refuses NUL) must
+		// fail alone; the rest of the batch still commits.
+		s := factory(t)
+		mustQueue(t, s, "q1")
+		bad := newTask("q1", "bad", t0)
+		bad.Headers = map[string]string{"X-Nul": "a\x00b"}
+		res, err := s.CreateTasks(ctx, []store.NewTask{newTask("q1", "a", t0), bad, newTask("q1", "c", t0)}, t0)
+		if err != nil {
+			t.Fatalf("batch failed as a whole: %v", err)
+		}
+		if res[0].Err != nil || res[2].Err != nil {
+			t.Fatalf("good items failed: %v / %v", res[0].Err, res[2].Err)
+		}
+		for _, id := range []string{"a", "c"} {
+			if _, err := s.GetTask(ctx, "q1", id, store.ViewBasic); err != nil {
+				t.Fatalf("task %s not committed: %v", id, err)
+			}
 		}
 	})
 

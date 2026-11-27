@@ -38,7 +38,7 @@ func TestBlueGreenHandoff(t *testing.T) {
 	}
 	st1 := openPG()
 	defer st1.Close()
-	if _, err := st1.DB().ExecContext(ctx, `DROP TABLE IF EXISTS task_attempts, tasks, queues, schema_migrations CASCADE`); err != nil {
+	if _, err := st1.DB().ExecContext(ctx, `DROP TABLE IF EXISTS api_keys, invites, sessions, users, task_attempts, tasks, queues, schema_migrations CASCADE`); err != nil {
 		t.Fatal(err)
 	}
 	if err := st1.Migrate(ctx); err != nil {

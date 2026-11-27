@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/blissfulrays/pushq/internal/auth"
+	"github.com/blissfulrays/pushq/internal/httpheader"
 	"github.com/blissfulrays/pushq/internal/store"
 	"github.com/blissfulrays/pushq/internal/version"
 )
@@ -45,7 +46,11 @@ func (d *Dispatcher) worker(t store.Task, q store.Queue) {
 			d.log.Debug("lease lost; result discarded", "queue", t.Queue, "task", t.ID)
 		}
 	} else {
-		cooldown = d.finishFailure(t, q, att, status, retryAfter, now)
+		// A task whose own headers can never be sent won't get better with
+		// retries; fail it now (queue-level config can still be fixed, so
+		// those errors keep retrying).
+		permanent := att.ErrorKind == store.ErrKindConfig && httpheader.Check(t.Headers) != nil
+		cooldown = d.finishFailure(t, q, att, status, retryAfter, now, permanent)
 	}
 
 	// Must not be dropped: inflight accounting is loop-owned and only this
@@ -123,6 +128,16 @@ func (d *Dispatcher) buildRequest(t store.Task, q store.Queue, now time.Time) (*
 		body = nil // method override may strip the body (GCP parity)
 	}
 
+	// Tasks stored before header validation existed may still carry headers
+	// net/http refuses to send; report that as a config error, not a
+	// connection failure.
+	if err := httpheader.Check(t.Headers); err != nil {
+		return nil, err
+	}
+	if err := httpheader.Check(q.Target.HeaderOverrides); err != nil {
+		return nil, fmt.Errorf("queue header override: %w", err)
+	}
+
 	req, err := http.NewRequest(method, urlStr, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
@@ -172,14 +187,14 @@ func resolveURL(t store.Task, q store.Queue) (string, error) {
 // finishFailure applies retry semantics after a failed attempt and returns a
 // queue cooldown when the target asked us to back off. Shared by workers and
 // the lease sweeper.
-func (d *Dispatcher) finishFailure(t store.Task, q store.Queue, att store.Attempt, status int, retryAfter *time.Duration, now time.Time) time.Time {
+func (d *Dispatcher) finishFailure(t store.Task, q store.Queue, att store.Attempt, status int, retryAfter *time.Duration, now time.Time, permanent bool) time.Time {
 	rc := t.RetryOverride.Merge(q.Retry)
 	attempts := t.DispatchCount
 
 	ctx, cancel := context.WithTimeout(context.Background(), finishTimeout)
 	defer cancel()
 
-	if Exhausted(rc, attempts, t.FirstAttemptAt, now) {
+	if permanent || Exhausted(rc, attempts, t.FirstAttemptAt, now) {
 		ok, err := d.st.FinishAttempt(ctx, now, t.PK, t.LeaseToken, att, store.OutcomeFailed, time.Time{})
 		if err != nil {
 			d.log.Error("finish attempt", "queue", t.Queue, "task", t.ID, "err", err)

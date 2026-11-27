@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
-	import { base } from '$app/paths';
 	import { page } from '$app/state';
+	import FolderCrumbs from '$lib/components/FolderCrumbs.svelte';
+	import { folderOf, leafOf, queueHref } from '$lib/folders';
 	import { api, errorMessage, type Attempt, type Task } from '$lib/api';
 	import { auth } from '$lib/auth.svelte';
 	import { absoluteTime, decodeBody, duration, millis, num, truncateMiddle } from '$lib/format';
@@ -71,7 +72,7 @@
 		try {
 			await api.deleteTask(qname, taskId);
 			deleteOpen = false;
-			goto(`${base}/queues/${encodeURIComponent(qname)}`);
+			goto(queueHref(qname));
 		} catch (e) {
 			actionError = errorMessage(e);
 		} finally {
@@ -105,12 +106,11 @@
 <div class="space-y-6">
 	<div class="flex flex-wrap items-center justify-between gap-3">
 		<div class="min-w-0">
-			<a
-				href={`${base}/queues/${encodeURIComponent(qname)}`}
-				class="text-xs text-muted-foreground hover:text-foreground"
-			>
-				&larr; {qname}
-			</a>
+			<div class="flex min-w-0 flex-wrap items-center gap-1 text-xs text-muted-foreground">
+				<FolderCrumbs folder={folderOf(qname)} />
+				<span aria-hidden="true">/</span>
+				<a href={queueHref(qname)} class="font-mono hover:text-foreground">{leafOf(qname)}</a>
+			</div>
 			<div class="mt-1 flex items-center gap-3">
 				<h1 class="break-all font-mono text-lg font-semibold tracking-tight" title={taskId}>
 					{truncateMiddle(taskId, 40)}
@@ -120,17 +120,19 @@
 				{/if}
 			</div>
 		</div>
-		<div class="flex items-center gap-2">
-			<Button variant="outline" size="sm" disabled={busy || !task} onclick={runNow}>Run now</Button>
-			<Button
-				variant="destructive"
-				size="sm"
-				disabled={busy || !task}
-				onclick={() => (deleteOpen = true)}
-			>
-				Delete
-			</Button>
-		</div>
+		{#if auth.can.write}
+			<div class="flex items-center gap-2">
+				<Button variant="outline" size="sm" disabled={busy || !task} onclick={runNow}>Run now</Button>
+				<Button
+					variant="destructive"
+					size="sm"
+					disabled={busy || !task}
+					onclick={() => (deleteOpen = true)}
+				>
+					Delete
+				</Button>
+			</div>
+		{/if}
 	</div>
 
 	<ErrorAlert message={actionError} />

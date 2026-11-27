@@ -79,6 +79,16 @@ type Dispatcher struct {
 	byName      map[string]*queueState
 	h           queueHeap
 	globalInUse int
+
+	// inflightByQueue counts running workers per queue ID. Unlike queues it
+	// survives leadership terms: workers from a previous term may still be
+	// running (and will report back) after a new term starts, so their slots
+	// must stay accounted for. globalInUse persists for the same reason.
+	inflightByQueue map[int64]int
+	// parked holds queues that have work but were skipped because every
+	// global slot was busy. They wait outside the heap (so the loop doesn't
+	// spin) and are re-added when a worker finishes.
+	parked map[int64]*queueState
 }
 
 func New(st store.Store, opts Options, log *slog.Logger, met *metrics.Metrics) *Dispatcher {
@@ -126,6 +136,9 @@ func New(st store.Store, opts Options, log *slog.Logger, met *metrics.Metrics) *
 		doneCh: make(chan doneMsg, 1024),
 		queues: map[int64]*queueState{},
 		byName: map[string]*queueState{},
+
+		inflightByQueue: map[int64]int{},
+		parked:          map[int64]*queueState{},
 	}
 	d.role.Store("stopped")
 	return d
@@ -188,7 +201,9 @@ func (d *Dispatcher) lead(ctx context.Context, lost <-chan struct{}) {
 	d.queues = map[int64]*queueState{}
 	d.byName = map[string]*queueState{}
 	d.h = queueHeap{}
-	d.globalInUse = 0
+	d.parked = map[int64]*queueState{}
+	// globalInUse and inflightByQueue are deliberately not reset: workers
+	// from an earlier term may still be running.
 
 	d.reconcile(ctx)
 	lastReconcile := d.clock.Now()
@@ -238,8 +253,11 @@ func (d *Dispatcher) lead(ctx context.Context, lost <-chan struct{}) {
 			lastSweep = now
 		}
 		if !now.Before(lastCleanup.Add(d.opts.CleanupInterval)) {
-			d.cleanup(ctx, now)
 			lastCleanup = now
+			if d.cleanup(ctx, now) {
+				// Backlog left: come back in cleanupRetry, not a full interval.
+				lastCleanup = now.Add(cleanupRetry - d.opts.CleanupInterval)
+			}
 		}
 		if !now.Before(lastReconcile.Add(d.opts.ReconcileInterval)) {
 			d.reconcile(ctx)
@@ -270,14 +288,21 @@ func (d *Dispatcher) drain() {
 		d.workerWG.Wait()
 		close(done)
 	}()
-	select {
-	case <-done:
-	case <-time.After(d.opts.DrainTimeout):
-		d.log.Warn("drain timeout; aborting in-flight dispatches")
-		d.workerCancel()
-		<-done
+	// Keep consuming completions: the loop has exited, and a worker blocked
+	// sending to a full doneCh would otherwise never return.
+	timeout := time.After(d.opts.DrainTimeout)
+	for {
+		select {
+		case <-done:
+			d.workerCancel()
+			return
+		case <-d.doneCh:
+		case <-timeout:
+			d.log.Warn("drain timeout; aborting in-flight dispatches")
+			d.workerCancel()
+			timeout = nil
+		}
 	}
-	d.workerCancel()
 }
 
 // ensure returns the cached state for a queue, loading config on demand.
@@ -294,6 +319,7 @@ func (d *Dispatcher) ensure(ctx context.Context, queueID int64) *queueState {
 		return nil
 	}
 	qs := newQueueState(cfgs[0])
+	qs.inflight = d.inflightByQueue[queueID]
 	d.queues[queueID] = qs
 	d.byName[cfgs[0].Name] = qs
 	d.met.ActiveQueues.Set(float64(len(d.queues)))
@@ -364,15 +390,26 @@ func (d *Dispatcher) handleEvent(ctx context.Context, ev store.Event) {
 func (d *Dispatcher) handleDone(msg doneMsg) {
 	d.globalInUse--
 	d.met.Inflight.Set(float64(d.globalInUse))
+	if n := d.inflightByQueue[msg.queueID] - 1; n > 0 {
+		d.inflightByQueue[msg.queueID] = n
+	} else {
+		delete(d.inflightByQueue, msg.queueID)
+	}
+	now := d.clock.Now()
+	// A global slot just freed up: let parked queues compete for it.
+	for id, pq := range d.parked {
+		delete(d.parked, id)
+		d.h.update(pq, now)
+	}
 	qs, ok := d.queues[msg.queueID]
 	if !ok {
 		return
 	}
-	qs.inflight--
+	qs.inflight = d.inflightByQueue[msg.queueID]
 	if msg.cooldown.After(qs.cooldown) {
 		qs.cooldown = msg.cooldown
 	}
-	d.h.update(qs, d.clock.Now())
+	d.h.update(qs, now)
 }
 
 // forceRun dispatches one task immediately, bypassing rate limits and PAUSED
@@ -397,7 +434,8 @@ func (d *Dispatcher) forceRun(ctx context.Context, ev store.Event) {
 
 // spawn launches a worker for a claimed task. Loop goroutine only.
 func (d *Dispatcher) spawn(t store.Task, qs *queueState) {
-	qs.inflight++
+	d.inflightByQueue[qs.cfg.ID]++
+	qs.inflight = d.inflightByQueue[qs.cfg.ID]
 	d.globalInUse++
 	d.met.Inflight.Set(float64(d.globalInUse))
 	d.met.ClaimedTotal.Inc()
@@ -418,13 +456,20 @@ func (d *Dispatcher) tick(ctx context.Context, now time.Time) {
 	globalAvail := d.opts.GlobalConcurrency - d.globalInUse
 
 	for _, qs := range due {
+		if globalAvail <= 0 {
+			// Every global slot is busy. Re-adding the queue to the heap
+			// would make it due again immediately and spin the loop; park
+			// it until handleDone frees a slot.
+			d.parked[qs.cfg.ID] = qs
+			continue
+		}
 		n := qs.budget(now, d.opts.PerQueueClaimCap, globalAvail)
 		if n <= 0 {
 			d.h.update(qs, now)
 			continue
 		}
 		globalAvail -= n
-		budgets = append(budgets, store.ClaimBudget{QueueID: qs.cfg.ID, N: n, PurgedAt: qs.cfg.PurgedAt})
+		budgets = append(budgets, store.ClaimBudget{QueueID: qs.cfg.ID, N: n})
 		requested[qs.cfg.ID] = n
 		byID[qs.cfg.ID] = qs
 	}
@@ -437,6 +482,9 @@ func (d *Dispatcher) tick(ctx context.Context, now time.Time) {
 	if err != nil {
 		d.log.Error("claim tasks", "err", err)
 		for _, qs := range byID {
+			// Back off instead of retrying (and logging) in a tight loop.
+			qs.nextReady = now.Add(time.Second)
+			qs.hasWork = true
 			d.h.update(qs, now)
 		}
 		return
@@ -510,6 +558,7 @@ func (d *Dispatcher) reconcile(ctx context.Context) {
 		qs, ok := d.queues[s.QueueID]
 		if !ok {
 			qs = newQueueState(cfg)
+			qs.inflight = d.inflightByQueue[s.QueueID]
 			d.queues[s.QueueID] = qs
 			d.byName[cfg.Name] = qs
 		} else {
@@ -582,15 +631,48 @@ func (d *Dispatcher) sweep(ctx context.Context, now time.Time) {
 		}
 		// The dispatch may well have happened (crashed worker) — counting
 		// it preserves max_attempts semantics; at-least-once same as GCP.
-		d.finishFailure(t, cfg, att, 0, nil, now)
+		d.finishFailure(t, cfg, att, 0, nil, now, false)
 	}
 }
 
-func (d *Dispatcher) cleanup(ctx context.Context, now time.Time) {
-	if _, err := d.st.CleanupTerminal(ctx, now, d.opts.RetentionSucceeded, d.opts.RetentionFailed, d.opts.DedupWindow, 1000); err != nil {
-		d.log.Error("cleanup terminal", "err", err)
+const (
+	cleanupBatch  = 1000
+	cleanupBudget = 250 * time.Millisecond // per pass; runs on the loop goroutine
+	cleanupRetry  = time.Second            // next pass when a backlog remains
+)
+
+// cleanup deletes expired terminal tasks and purged rows in batches until
+// none are left or the time budget is spent. It reports whether a backlog
+// remains, in which case the caller should run it again soon rather than
+// after a full CleanupInterval — one fixed batch per interval cannot keep up
+// with sustained throughput.
+func (d *Dispatcher) cleanup(ctx context.Context, now time.Time) (more bool) {
+	deadline := time.Now().Add(cleanupBudget)
+	terminalDone, purgedDone := false, false
+	for !(terminalDone && purgedDone) {
+		if time.Now().After(deadline) || ctx.Err() != nil {
+			return true
+		}
+		if !terminalDone {
+			// Up to cleanupBatch rows per state; fewer in total means every
+			// state is drained.
+			n, err := d.st.CleanupTerminal(ctx, now, d.opts.RetentionSucceeded, d.opts.RetentionFailed, d.opts.DedupWindow, cleanupBatch)
+			if err != nil {
+				d.log.Error("cleanup terminal", "err", err)
+				terminalDone = true
+			} else if n < cleanupBatch {
+				terminalDone = true
+			}
+		}
+		if !purgedDone {
+			n, err := d.st.HardDeletePurged(ctx, cleanupBatch)
+			if err != nil {
+				d.log.Error("hard delete purged", "err", err)
+				purgedDone = true
+			} else if n < cleanupBatch {
+				purgedDone = true
+			}
+		}
 	}
-	if _, err := d.st.HardDeletePurged(ctx, 1000); err != nil {
-		d.log.Error("hard delete purged", "err", err)
-	}
+	return false
 }

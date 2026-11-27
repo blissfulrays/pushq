@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Union
+from urllib.parse import quote
 
 import httpx
 
@@ -19,6 +20,12 @@ from ._models import (
     Task,
     _prune,
 )
+
+
+def _seg(s: str) -> str:
+    """Percent-encode one path segment. Queue names may contain '/' (folders,
+    e.g. "user/instagram"), which must travel as %2F."""
+    return quote(s, safe="")
 
 
 class PushqError(Exception):
@@ -152,7 +159,7 @@ class Pushq:
         """Create or replace queue config. Never changes run state; a signing
         secret is kept unless explicitly set (use "" to clear)."""
         wire = _queue_config_wire(rate_limits, retry, target, dead_letter_queue)
-        return Queue.from_wire(self._req("PUT", f"/v1/queues/{name}", json=wire))
+        return Queue.from_wire(self._req("PUT", f"/v1/queues/{_seg(name)}", json=wire))
 
     def create_queue(self, name: str, **kwargs: Any) -> Queue:
         wire = _queue_config_wire(
@@ -163,7 +170,7 @@ class Pushq:
         return Queue.from_wire(self._req("POST", "/v1/queues", json=wire))
 
     def get_queue(self, name: str) -> Queue:
-        return Queue.from_wire(self._req("GET", f"/v1/queues/{name}"))
+        return Queue.from_wire(self._req("GET", f"/v1/queues/{_seg(name)}"))
 
     def patch_queue(
         self,
@@ -176,7 +183,7 @@ class Pushq:
         dead_letter_queue: Optional[str] = None,
     ) -> Queue:
         wire = _queue_config_wire(rate_limits, retry, target, dead_letter_queue, state)
-        return Queue.from_wire(self._req("PATCH", f"/v1/queues/{name}", json=wire))
+        return Queue.from_wire(self._req("PATCH", f"/v1/queues/{_seg(name)}", json=wire))
 
     def list_queues(
         self,
@@ -193,20 +200,20 @@ class Pushq:
         )
 
     def delete_queue(self, name: str) -> None:
-        self._req("DELETE", f"/v1/queues/{name}")
+        self._req("DELETE", f"/v1/queues/{_seg(name)}")
 
     def pause_queue(self, name: str) -> Queue:
-        return Queue.from_wire(self._req("POST", f"/v1/queues/{name}:pause"))
+        return Queue.from_wire(self._req("POST", f"/v1/queues/{_seg(name)}:pause"))
 
     def resume_queue(self, name: str) -> Queue:
-        return Queue.from_wire(self._req("POST", f"/v1/queues/{name}:resume"))
+        return Queue.from_wire(self._req("POST", f"/v1/queues/{_seg(name)}:resume"))
 
     def purge_queue(self, name: str) -> Queue:
         """Delete every task created up to now (exact watermark)."""
-        return Queue.from_wire(self._req("POST", f"/v1/queues/{name}:purge"))
+        return Queue.from_wire(self._req("POST", f"/v1/queues/{_seg(name)}:purge"))
 
     def queue_stats(self, name: str, *, id_prefix: Optional[str] = None) -> QueueStats:
-        w = self._req("GET", f"/v1/queues/{name}/stats", params=_prune(id_prefix=id_prefix))
+        w = self._req("GET", f"/v1/queues/{_seg(name)}/stats", params=_prune(id_prefix=id_prefix))
         return QueueStats.from_wire(w)
 
     # --- tasks ---
@@ -233,7 +240,7 @@ class Pushq:
             delay_seconds=delay_seconds, dispatch_deadline_seconds=dispatch_deadline_seconds,
             retry=retry,
         )
-        return Task.from_wire(self._req("POST", f"/v1/queues/{queue}/tasks", json=wire))
+        return Task.from_wire(self._req("POST", f"/v1/queues/{_seg(queue)}/tasks", json=wire))
 
     def create_tasks(self, queue: str, tasks: Iterable[Dict[str, Any]]) -> List[BatchResult]:
         """Batch enqueue (≤500). Each item is the kwargs of create_task."""
@@ -245,11 +252,11 @@ class Pushq:
             dispatch_deadline_seconds=t.get("dispatch_deadline_seconds"),
             retry=t.get("retry"),
         ) for t in tasks]
-        w = self._req("POST", f"/v1/queues/{queue}/tasks:batch", json={"tasks": wire})
+        w = self._req("POST", f"/v1/queues/{_seg(queue)}/tasks:batch", json={"tasks": wire})
         return [BatchResult.from_wire(r) for r in w.get("results", [])]
 
     def get_task(self, queue: str, task_id: str, *, view: str = "basic") -> Task:
-        w = self._req("GET", f"/v1/queues/{queue}/tasks/{task_id}", params={"view": view})
+        w = self._req("GET", f"/v1/queues/{_seg(queue)}/tasks/{_seg(task_id)}", params={"view": view})
         return Task.from_wire(w)
 
     def list_tasks(
@@ -262,7 +269,7 @@ class Pushq:
         page_size: Optional[int] = None,
         page_token: Optional[str] = None,
     ) -> Page:
-        w = self._req("GET", f"/v1/queues/{queue}/tasks", params=_prune(
+        w = self._req("GET", f"/v1/queues/{_seg(queue)}/tasks", params=_prune(
             state=state, id_prefix=id_prefix, view=view,
             page_size=page_size, page_token=page_token))
         return Page(
@@ -271,14 +278,14 @@ class Pushq:
         )
 
     def delete_task(self, queue: str, task_id: str) -> None:
-        self._req("DELETE", f"/v1/queues/{queue}/tasks/{task_id}")
+        self._req("DELETE", f"/v1/queues/{_seg(queue)}/tasks/{_seg(task_id)}")
 
     def run_task(self, queue: str, task_id: str) -> Task:
         """Force immediate dispatch (bypasses rate limits and PAUSED)."""
-        return Task.from_wire(self._req("POST", f"/v1/queues/{queue}/tasks/{task_id}:run"))
+        return Task.from_wire(self._req("POST", f"/v1/queues/{_seg(queue)}/tasks/{_seg(task_id)}:run"))
 
     def list_attempts(self, queue: str, task_id: str) -> List[Attempt]:
-        w = self._req("GET", f"/v1/queues/{queue}/tasks/{task_id}/attempts")
+        w = self._req("GET", f"/v1/queues/{_seg(queue)}/tasks/{_seg(task_id)}/attempts")
         return [Attempt.from_wire(a) for a in w.get("attempts", [])]
 
 
@@ -324,25 +331,25 @@ class AsyncPushq:
         dead_letter_queue: Optional[str] = None,
     ) -> Queue:
         wire = _queue_config_wire(rate_limits, retry, target, dead_letter_queue)
-        return Queue.from_wire(await self._req("PUT", f"/v1/queues/{name}", json=wire))
+        return Queue.from_wire(await self._req("PUT", f"/v1/queues/{_seg(name)}", json=wire))
 
     async def get_queue(self, name: str) -> Queue:
-        return Queue.from_wire(await self._req("GET", f"/v1/queues/{name}"))
+        return Queue.from_wire(await self._req("GET", f"/v1/queues/{_seg(name)}"))
 
     async def pause_queue(self, name: str) -> Queue:
-        return Queue.from_wire(await self._req("POST", f"/v1/queues/{name}:pause"))
+        return Queue.from_wire(await self._req("POST", f"/v1/queues/{_seg(name)}:pause"))
 
     async def resume_queue(self, name: str) -> Queue:
-        return Queue.from_wire(await self._req("POST", f"/v1/queues/{name}:resume"))
+        return Queue.from_wire(await self._req("POST", f"/v1/queues/{_seg(name)}:resume"))
 
     async def purge_queue(self, name: str) -> Queue:
-        return Queue.from_wire(await self._req("POST", f"/v1/queues/{name}:purge"))
+        return Queue.from_wire(await self._req("POST", f"/v1/queues/{_seg(name)}:purge"))
 
     async def delete_queue(self, name: str) -> None:
-        await self._req("DELETE", f"/v1/queues/{name}")
+        await self._req("DELETE", f"/v1/queues/{_seg(name)}")
 
     async def queue_stats(self, name: str, *, id_prefix: Optional[str] = None) -> QueueStats:
-        w = await self._req("GET", f"/v1/queues/{name}/stats", params=_prune(id_prefix=id_prefix))
+        w = await self._req("GET", f"/v1/queues/{_seg(name)}/stats", params=_prune(id_prefix=id_prefix))
         return QueueStats.from_wire(w)
 
     async def create_task(self, queue: str, **kwargs: Any) -> Task:
@@ -354,7 +361,7 @@ class AsyncPushq:
             dispatch_deadline_seconds=kwargs.get("dispatch_deadline_seconds"),
             retry=kwargs.get("retry"),
         )
-        return Task.from_wire(await self._req("POST", f"/v1/queues/{queue}/tasks", json=wire))
+        return Task.from_wire(await self._req("POST", f"/v1/queues/{_seg(queue)}/tasks", json=wire))
 
     async def create_tasks(self, queue: str, tasks: Iterable[Dict[str, Any]]) -> List[BatchResult]:
         wire = [_task_create_wire(
@@ -365,15 +372,15 @@ class AsyncPushq:
             dispatch_deadline_seconds=t.get("dispatch_deadline_seconds"),
             retry=t.get("retry"),
         ) for t in tasks]
-        w = await self._req("POST", f"/v1/queues/{queue}/tasks:batch", json={"tasks": wire})
+        w = await self._req("POST", f"/v1/queues/{_seg(queue)}/tasks:batch", json={"tasks": wire})
         return [BatchResult.from_wire(r) for r in w.get("results", [])]
 
     async def get_task(self, queue: str, task_id: str, *, view: str = "basic") -> Task:
-        w = await self._req("GET", f"/v1/queues/{queue}/tasks/{task_id}", params={"view": view})
+        w = await self._req("GET", f"/v1/queues/{_seg(queue)}/tasks/{_seg(task_id)}", params={"view": view})
         return Task.from_wire(w)
 
     async def list_tasks(self, queue: str, **kwargs: Any) -> Page:
-        w = await self._req("GET", f"/v1/queues/{queue}/tasks", params=_prune(
+        w = await self._req("GET", f"/v1/queues/{_seg(queue)}/tasks", params=_prune(
             state=kwargs.get("state"), id_prefix=kwargs.get("id_prefix"),
             view=kwargs.get("view"), page_size=kwargs.get("page_size"),
             page_token=kwargs.get("page_token")))
@@ -383,13 +390,13 @@ class AsyncPushq:
         )
 
     async def delete_task(self, queue: str, task_id: str) -> None:
-        await self._req("DELETE", f"/v1/queues/{queue}/tasks/{task_id}")
+        await self._req("DELETE", f"/v1/queues/{_seg(queue)}/tasks/{_seg(task_id)}")
 
     async def run_task(self, queue: str, task_id: str) -> Task:
-        return Task.from_wire(await self._req("POST", f"/v1/queues/{queue}/tasks/{task_id}:run"))
+        return Task.from_wire(await self._req("POST", f"/v1/queues/{_seg(queue)}/tasks/{_seg(task_id)}:run"))
 
     async def list_attempts(self, queue: str, task_id: str) -> List[Attempt]:
-        w = await self._req("GET", f"/v1/queues/{queue}/tasks/{task_id}/attempts")
+        w = await self._req("GET", f"/v1/queues/{_seg(queue)}/tasks/{_seg(task_id)}/attempts")
         return [Attempt.from_wire(a) for a in w.get("attempts", [])]
 
 

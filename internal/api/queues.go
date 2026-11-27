@@ -4,8 +4,6 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/go-chi/chi/v5"
-
 	"github.com/blissfulrays/pushq/internal/api/types"
 	"github.com/blissfulrays/pushq/internal/store"
 )
@@ -31,7 +29,7 @@ func (s *Server) handleQueueCreate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleQueuePut(w http.ResponseWriter, r *http.Request) {
-	name := chi.URLParam(r, "queue")
+	name := queueParam(r)
 	var body types.QueuePut
 	if err := s.decodeJSON(w, r, &body, 256<<10); err != nil {
 		s.writeErr(w, r, err)
@@ -61,7 +59,7 @@ func (s *Server) handleQueuePut(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleQueueGet(w http.ResponseWriter, r *http.Request) {
-	q, err := s.Store.GetQueue(r.Context(), chi.URLParam(r, "queue"))
+	q, err := s.Store.GetQueue(r.Context(), queueParam(r))
 	if err != nil {
 		s.writeErr(w, r, err)
 		return
@@ -70,7 +68,7 @@ func (s *Server) handleQueueGet(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleQueuePatch(w http.ResponseWriter, r *http.Request) {
-	name := chi.URLParam(r, "queue")
+	name := queueParam(r)
 	var body types.QueuePatch
 	if err := s.decodeJSON(w, r, &body, 256<<10); err != nil {
 		s.writeErr(w, r, err)
@@ -81,16 +79,11 @@ func (s *Server) handleQueuePatch(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, r, err)
 		return
 	}
+	// Validate the merged result inside the store transaction, before it is
+	// written, so a patch can never persist invalid config.
+	p.Validate = validateUpsert
 	q, err := s.Store.PatchQueue(r.Context(), name, p, s.Now())
 	if err != nil {
-		s.writeErr(w, r, err)
-		return
-	}
-	// Re-validate the merged result so a patch cannot leave invalid config.
-	if err := validateUpsert(store.QueueUpsert{
-		Name: q.Name, RateLimits: q.RateLimits, Retry: q.Retry, Target: q.Target,
-		DeadLetterQueue: q.DeadLetterQueue,
-	}); err != nil {
 		s.writeErr(w, r, err)
 		return
 	}
@@ -123,7 +116,7 @@ func (s *Server) handleQueueList(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleQueueDelete(w http.ResponseWriter, r *http.Request) {
-	if err := s.Store.DeleteQueue(r.Context(), chi.URLParam(r, "queue")); err != nil {
+	if err := s.Store.DeleteQueue(r.Context(), queueParam(r)); err != nil {
 		s.writeErr(w, r, err)
 		return
 	}
@@ -131,7 +124,7 @@ func (s *Server) handleQueueDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleQueuePause(w http.ResponseWriter, r *http.Request) {
-	q, err := s.Store.SetQueueState(r.Context(), chi.URLParam(r, "queue"), store.QueuePaused, s.Now())
+	q, err := s.Store.SetQueueState(r.Context(), queueParam(r), store.QueuePaused, s.Now())
 	if err != nil {
 		s.writeErr(w, r, err)
 		return
@@ -140,7 +133,7 @@ func (s *Server) handleQueuePause(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleQueueResume(w http.ResponseWriter, r *http.Request) {
-	q, err := s.Store.SetQueueState(r.Context(), chi.URLParam(r, "queue"), store.QueueRunning, s.Now())
+	q, err := s.Store.SetQueueState(r.Context(), queueParam(r), store.QueueRunning, s.Now())
 	if err != nil {
 		s.writeErr(w, r, err)
 		return
@@ -149,7 +142,7 @@ func (s *Server) handleQueueResume(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleQueuePurge(w http.ResponseWriter, r *http.Request) {
-	q, err := s.Store.PurgeQueue(r.Context(), chi.URLParam(r, "queue"), s.Now())
+	q, err := s.Store.PurgeQueue(r.Context(), queueParam(r), s.Now())
 	if err != nil {
 		s.writeErr(w, r, err)
 		return
@@ -158,7 +151,7 @@ func (s *Server) handleQueuePurge(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleQueueStats(w http.ResponseWriter, r *http.Request) {
-	name := chi.URLParam(r, "queue")
+	name := queueParam(r)
 	now := s.Now()
 	q, err := s.Store.GetQueue(r.Context(), name)
 	if err != nil {

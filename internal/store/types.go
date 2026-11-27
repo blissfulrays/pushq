@@ -156,6 +156,11 @@ type QueuePatch struct {
 	TargetHeaderOverrides   *map[string]string
 	SigningSecret           *string
 	DeadLetterQueue         *string
+
+	// Validate, when set, is called with the merged config inside the
+	// transaction before anything is written; a non-nil error aborts the
+	// patch and is returned as-is.
+	Validate func(QueueUpsert) error
 }
 
 type UpsertOutcome int
@@ -271,10 +276,11 @@ type QueueSeed struct {
 	NextSchedule *time.Time
 }
 
+// ClaimBudget asks ClaimTasks for up to N due tasks from one queue. Stores
+// apply the queue's current purge watermark themselves.
 type ClaimBudget struct {
-	QueueID  int64
-	N        int
-	PurgedAt *time.Time
+	QueueID int64
+	N       int
 }
 
 type Outcome int

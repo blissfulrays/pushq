@@ -2,14 +2,19 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/blissfulrays/pushq/internal/accounts"
 	"github.com/blissfulrays/pushq/internal/auth"
 	"github.com/blissfulrays/pushq/internal/config"
 	"github.com/blissfulrays/pushq/internal/store"
@@ -19,12 +24,15 @@ import (
 type Server struct {
 	Store          store.Store
 	Auth           *auth.Auth
+	Accounts       *accounts.Store // nil disables dashboard accounts
 	Log            *slog.Logger
 	Limits         config.Limits
 	MetricsPublic  bool
 	MetricsHandler http.Handler
 	Now            func() time.Time
 	Role           func() string // "leader" | "follower" for readyz
+
+	loginLimiter limiterMap
 }
 
 func (s *Server) Router() http.Handler {
@@ -37,40 +45,66 @@ func (s *Server) Router() http.Handler {
 		if s.MetricsPublic {
 			r.Handle("/metrics", s.MetricsHandler)
 		} else {
-			r.With(s.requireRole(auth.RoleAdmin)).Handle("/metrics", s.MetricsHandler)
+			r.With(s.authenticate, s.require(auth.PermList)).Handle("/metrics", s.MetricsHandler)
 		}
 	}
 
 	r.Route("/v1", func(r chi.Router) {
-		r.With(s.requireRole(auth.RoleWriter)).Get("/version", s.handleVersion)
+		r.Use(s.authenticate)
 
-		// Writer endpoints.
+		// Sign-in flow; no credentials needed.
+		r.Get("/auth/session", s.handleSession)
+		r.Post("/auth/setup", s.handleSetup)
+		r.Post("/auth/login", s.handleLogin)
+		r.Post("/auth/logout", s.handleLogout)
+		r.Get("/auth/invites/{token}", s.handleInviteGet)
+		r.Post("/auth/invites/{token}:accept", s.handleInviteAccept)
+
+		read := r.With(s.require(auth.PermRead))
+		write := r.With(s.require(auth.PermWrite))
+
+		read.Get("/version", s.handleVersion)
+
+		write.Post("/queues", s.handleQueueCreate)
+		write.Put("/queues/{queue}", s.handleQueuePut)
+		read.Get("/queues/{queue}", s.handleQueueGet)
+		write.Patch("/queues/{queue}", s.handleQueuePatch)
+		write.Post("/queues/{queue}:pause", s.handleQueuePause)
+		write.Post("/queues/{queue}:resume", s.handleQueueResume)
+		write.Post("/queues/{queue}:purge", s.handleQueuePurge)
+		read.Get("/queues/{queue}/stats", s.handleQueueStats)
+
+		write.Post("/queues/{queue}/tasks", s.handleTaskCreate)
+		write.Post("/queues/{queue}/tasks:batch", s.handleTaskBatch)
+		read.Get("/queues/{queue}/tasks", s.handleTaskList)
+		read.Get("/queues/{queue}/tasks/{taskID}", s.handleTaskGet)
+		write.Delete("/queues/{queue}/tasks/{taskID}", s.handleTaskDelete)
+		write.Post("/queues/{queue}/tasks/{taskID}:run", s.handleTaskRun)
+		read.Get("/queues/{queue}/tasks/{taskID}/attempts", s.handleAttemptsList)
+
+		r.With(s.require(auth.PermList)).Get("/queues", s.handleQueueList)
+		r.With(s.require(auth.PermDeleteQueue)).Delete("/queues/{queue}", s.handleQueueDelete)
+
+		// The signed-in user's own account.
 		r.Group(func(r chi.Router) {
-			r.Use(s.requireRole(auth.RoleWriter))
-
-			r.Post("/queues", s.handleQueueCreate)
-			r.Put("/queues/{queue}", s.handleQueuePut)
-			r.Get("/queues/{queue}", s.handleQueueGet)
-			r.Patch("/queues/{queue}", s.handleQueuePatch)
-			r.Post("/queues/{queue}:pause", s.handleQueuePause)
-			r.Post("/queues/{queue}:resume", s.handleQueueResume)
-			r.Post("/queues/{queue}:purge", s.handleQueuePurge)
-			r.Get("/queues/{queue}/stats", s.handleQueueStats)
-
-			r.Post("/queues/{queue}/tasks", s.handleTaskCreate)
-			r.Post("/queues/{queue}/tasks:batch", s.handleTaskBatch)
-			r.Get("/queues/{queue}/tasks", s.handleTaskList)
-			r.Get("/queues/{queue}/tasks/{taskID}", s.handleTaskGet)
-			r.Delete("/queues/{queue}/tasks/{taskID}", s.handleTaskDelete)
-			r.Post("/queues/{queue}/tasks/{taskID}:run", s.handleTaskRun)
-			r.Get("/queues/{queue}/tasks/{taskID}/attempts", s.handleAttemptsList)
+			r.Use(s.requireUser)
+			r.Patch("/me", s.handleMePatch)
+			r.Post("/me/password", s.handleMePassword)
 		})
 
-		// Admin endpoints.
+		// Team and API keys (admins).
 		r.Group(func(r chi.Router) {
-			r.Use(s.requireRole(auth.RoleAdmin))
-			r.Get("/queues", s.handleQueueList)
-			r.Delete("/queues/{queue}", s.handleQueueDelete)
+			r.Use(s.require(auth.PermManage), s.requireAccounts)
+			r.Get("/users", s.handleUserList)
+			r.Patch("/users/{id}", s.handleUserPatch)
+			r.Delete("/users/{id}", s.handleUserDelete)
+			r.Post("/users/{id}/reset-link", s.handleUserResetLink)
+			r.Get("/invites", s.handleInviteList)
+			r.Post("/invites", s.handleInviteCreate)
+			r.Delete("/invites/{id}", s.handleInviteDelete)
+			r.Get("/api-keys", s.handleKeyList)
+			r.Post("/api-keys", s.handleKeyCreate)
+			r.Delete("/api-keys/{id}", s.handleKeyDelete)
 		})
 	})
 
@@ -83,13 +117,35 @@ func (s *Server) Router() http.Handler {
 	})
 
 	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
-		writeProblem(w, r, http.StatusNotFound, CodeNotFound, "no such endpoint")
+		msg := "no such endpoint"
+		if rest, ok := strings.CutPrefix(r.URL.Path, "/v1/queues/"); ok && strings.Contains(rest, "/") {
+			msg += "; if the queue name contains '/', URL-encode it in the path (user/instagram -> user%2Finstagram)"
+		}
+		writeProblem(w, r, http.StatusNotFound, CodeNotFound, msg)
 	})
 	r.MethodNotAllowed(func(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, r, http.StatusMethodNotAllowed, CodeInvalidArgument, "method not allowed")
 	})
 	return r
 }
+
+// pathParam returns a decoded URL path parameter. chi matches routes against
+// r.URL.RawPath when the request used percent-encoding (which is what lets a
+// queue name like "user/instagram" travel as one segment, user%2Finstagram),
+// and in that case the captured value is still encoded.
+func pathParam(r *http.Request, key string) string {
+	v := chi.URLParam(r, key)
+	if r.URL.RawPath == "" {
+		return v
+	}
+	if dec, err := url.PathUnescape(v); err == nil {
+		return dec
+	}
+	return v
+}
+
+func queueParam(r *http.Request) string { return pathParam(r, "queue") }
+func taskParam(r *http.Request) string  { return pathParam(r, "taskID") }
 
 // --- middleware ---
 
@@ -125,21 +181,85 @@ func (s *Server) accessLog(next http.Handler) http.Handler {
 	})
 }
 
-func (s *Server) requireRole(min auth.Role) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			role := s.Auth.Authenticate(r)
-			if role == auth.RoleNone {
-				writeProblem(w, r, http.StatusUnauthorized, CodeUnauthenticated, "missing or invalid API key")
+type principalKey struct{}
+
+func principal(r *http.Request) auth.Principal {
+	p, _ := r.Context().Value(principalKey{}).(auth.Principal)
+	return p
+}
+
+// csrfHeader must accompany state-changing requests that rely on the session
+// cookie. Browsers only let same-origin scripts set custom headers (pushq
+// serves no CORS), so a forged cross-site form or fetch can't. Bearer-key
+// requests are unaffected.
+const csrfHeader = "X-Requested-With"
+
+func unsafeMethod(m string) bool {
+	return m != http.MethodGet && m != http.MethodHead && m != http.MethodOptions
+}
+
+// authenticate resolves the caller (without rejecting anyone) and enforces
+// the CSRF rule for cookie-based requests.
+func (s *Server) authenticate(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if unsafeMethod(r.Method) && r.Header.Get("Authorization") == "" && r.Header.Get(csrfHeader) == "" {
+			_, cookieErr := r.Cookie(auth.SessionCookie)
+			if cookieErr == nil || strings.HasPrefix(r.URL.Path, "/v1/auth/") {
+				writeProblem(w, r, http.StatusForbidden, CodePermissionDenied,
+					"browser requests must send the "+csrfHeader+" header")
 				return
 			}
-			if role < min {
-				writeProblem(w, r, http.StatusForbidden, CodePermissionDenied, "this endpoint requires the admin role")
+		}
+		p, renewed, err := s.Auth.Authenticate(r)
+		if err != nil {
+			s.writeErr(w, r, err)
+			return
+		}
+		if renewed != nil {
+			setSessionCookie(w, r, p.SessionToken, *renewed)
+		}
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), principalKey{}, p)))
+	})
+}
+
+// require rejects callers lacking the given permission.
+func (s *Server) require(perm auth.Perm) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			p := principal(r)
+			if p.Kind == auth.KindNone {
+				writeProblem(w, r, http.StatusUnauthorized, CodeUnauthenticated, "sign in or send a valid API key")
+				return
+			}
+			if !p.Can(perm) {
+				writeProblem(w, r, http.StatusForbidden, CodePermissionDenied,
+					fmt.Sprintf("the %s role is not allowed to do this", p.Role))
 				return
 			}
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// requireUser rejects callers that aren't a signed-in dashboard user.
+func (s *Server) requireUser(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if principal(r).Kind != auth.KindUser {
+			writeProblem(w, r, http.StatusUnauthorized, CodeUnauthenticated, "sign in to the dashboard to manage your account")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (s *Server) requireAccounts(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.Accounts == nil {
+			writeProblem(w, r, http.StatusNotFound, CodeNotFound, "dashboard accounts are not enabled")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // decodeJSON reads a size-limited JSON body.
@@ -159,10 +279,15 @@ func (s *Server) decodeJSON(w http.ResponseWriter, r *http.Request, dst any, max
 // writeErr routes any handler error to the right problem response.
 func (s *Server) writeErr(w http.ResponseWriter, r *http.Request, err error) {
 	var br badRequest
+	var inv *accounts.InvalidError
 	var maxErr *http.MaxBytesError
 	switch {
 	case errors.As(err, &br):
 		writeProblem(w, r, http.StatusBadRequest, CodeInvalidArgument, br.msg)
+	case errors.As(err, &inv):
+		writeProblem(w, r, http.StatusBadRequest, CodeInvalidArgument, inv.Msg)
+	case errors.Is(err, accounts.ErrBadCredentials):
+		writeProblem(w, r, http.StatusUnauthorized, CodeUnauthenticated, err.Error())
 	case errors.As(err, &maxErr):
 		writeProblem(w, r, http.StatusRequestEntityTooLarge, CodePayloadTooLarge, "request body too large")
 	case errors.Is(err, store.ErrNotFound), errors.Is(err, store.ErrAlreadyExists), errors.Is(err, store.ErrFailedPrecondition):

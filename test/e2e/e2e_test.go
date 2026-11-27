@@ -129,7 +129,7 @@ func newHarness(t *testing.T) *harness {
 
 	srv := &api.Server{
 		Store:  st,
-		Auth:   auth.New(nil),
+		Auth:   auth.New(nil, nil, false),
 		Log:    logger,
 		Limits: config.Default().Limits,
 		Now:    time.Now,
@@ -485,10 +485,13 @@ func TestLeaseRecoveryRedelivers(t *testing.T) {
 	waitFor(t, 10*time.Second, "redelivery after lease expiry", func() bool {
 		return h.receiver.count("/recovered") >= 1
 	})
-	_, body := h.do("GET", "/v1/queues/crashy/tasks/abandoned?view=full", nil)
-	if body["state"] != "succeeded" {
-		t.Errorf("state = %v", body["state"])
-	}
+	// The receiver sees the request before the dispatcher records the
+	// result, so wait for the state rather than reading it immediately.
+	var body map[string]any
+	waitFor(t, 5*time.Second, "succeeded state", func() bool {
+		_, body = h.do("GET", "/v1/queues/crashy/tasks/abandoned?view=full", nil)
+		return body["state"] == "succeeded"
+	})
 	// The abandoned claim counts as an attempt (lease_lost), then redelivery.
 	if dc := body["dispatch_count"].(float64); dc < 2 {
 		t.Errorf("dispatch_count = %v, want >= 2", dc)
@@ -638,7 +641,7 @@ func TestAuthRoles(t *testing.T) {
 		Auth: auth.New([]config.APIKey{
 			{Key: "admin-key", Role: config.RoleAdmin},
 			{Key: "writer-key", Role: config.RoleWriter},
-		}),
+		}, nil, false),
 		Log: logger, Limits: config.Default().Limits, Now: time.Now,
 	}
 	ts := httptest.NewServer(srv.Router())

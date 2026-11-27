@@ -91,6 +91,18 @@ func getQueueRef(ctx context.Context, tx querier, name string) (queueRef, error)
 	return ref, nil
 }
 
+// createdAt returns the creation time to record for a new task. It is always
+// strictly after the queue's purge watermark: a task created after a purge
+// (even within the same microsecond, or on a replica whose clock lags the one
+// that purged) must never be hidden by it.
+func (ref queueRef) createdAt(now time.Time) time.Time {
+	c := now.UTC().Round(time.Microsecond) // timestamptz precision
+	if ref.purged != nil && !c.After(*ref.purged) {
+		c = ref.purged.UTC().Add(time.Microsecond)
+	}
+	return c
+}
+
 func normalizeNewTask(t *store.NewTask) {
 	if t.ID == "" {
 		id, err := uuid.NewV7()
@@ -109,7 +121,7 @@ func normalizeNewTask(t *store.NewTask) {
 
 // insertTask inserts inside a savepoint so a conflict doesn't poison the
 // surrounding transaction (a Postgres-specific requirement).
-func insertTask(ctx context.Context, tx *sql.Tx, ref queueRef, t store.NewTask, now time.Time, spName string) (int64, error) {
+func insertTask(ctx context.Context, tx *sql.Tx, ref queueRef, t store.NewTask, created time.Time, spName string) (int64, error) {
 	headers, err := jsonOrNil(t.Headers)
 	if err != nil {
 		return 0, err
@@ -119,7 +131,7 @@ func insertTask(ctx context.Context, tx *sql.Tx, ref queueRef, t store.NewTask, 
 		return 0, err
 	}
 	args := []any{ref.id, t.ID, t.URL, t.Method, headers, t.Body,
-		t.DispatchDeadline.Milliseconds(), override, t.ScheduleTime.UTC(), now.UTC()}
+		t.DispatchDeadline.Milliseconds(), override, t.ScheduleTime.UTC(), created}
 	const q = `INSERT INTO tasks (queue_id, task_id, url, method, headers, body,
 		dispatch_deadline_ms, retry_override, schedule_time, created_at)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`
@@ -127,8 +139,24 @@ func insertTask(ctx context.Context, tx *sql.Tx, ref queueRef, t store.NewTask, 
 	if _, err := tx.ExecContext(ctx, "SAVEPOINT "+spName); err != nil {
 		return 0, err
 	}
+	pk, err := insertInSavepoint(ctx, tx, ref, t, q, args, spName)
+	if err != nil {
+		// Any failed statement aborts the whole transaction in Postgres;
+		// roll back to the savepoint so the rest of a batch still commits.
+		if _, rerr := tx.ExecContext(ctx, "ROLLBACK TO SAVEPOINT "+spName); rerr != nil {
+			return 0, rerr
+		}
+		return 0, err
+	}
+	if _, err := tx.ExecContext(ctx, "RELEASE SAVEPOINT "+spName); err != nil {
+		return 0, err
+	}
+	return pk, nil
+}
+
+func insertInSavepoint(ctx context.Context, tx *sql.Tx, ref queueRef, t store.NewTask, q string, args []any, spName string) (int64, error) {
 	var pk int64
-	err = tx.QueryRowContext(ctx, q, args...).Scan(&pk)
+	err := tx.QueryRowContext(ctx, q, args...).Scan(&pk)
 	if err != nil && isUniqueViolation(err) {
 		if _, rerr := tx.ExecContext(ctx, "ROLLBACK TO SAVEPOINT "+spName); rerr != nil {
 			return 0, rerr
@@ -147,13 +175,7 @@ func insertTask(ctx context.Context, tx *sql.Tx, ref queueRef, t store.NewTask, 
 		}
 		err = tx.QueryRowContext(ctx, q, args...).Scan(&pk)
 	}
-	if err != nil {
-		return 0, err
-	}
-	if _, err := tx.ExecContext(ctx, "RELEASE SAVEPOINT "+spName); err != nil {
-		return 0, err
-	}
-	return pk, nil
+	return pk, err
 }
 
 func (s *Store) CreateTask(ctx context.Context, t store.NewTask, now time.Time) (store.Task, error) {
@@ -203,7 +225,8 @@ func (s *Store) CreateTasks(ctx context.Context, ts []store.NewTask, now time.Ti
 			continue
 		}
 
-		pk, ierr := insertTask(ctx, tx, ref, t, now, fmt.Sprintf("sp_%d", i))
+		created := ref.createdAt(now)
+		pk, ierr := insertTask(ctx, tx, ref, t, created, fmt.Sprintf("sp_%d", i))
 		if ierr != nil {
 			results[i] = store.TaskResult{Err: ierr}
 			continue
@@ -212,7 +235,7 @@ func (s *Store) CreateTasks(ctx context.Context, ts []store.NewTask, now time.Ti
 			PK: pk, QueueID: ref.id, Queue: t.Queue, ID: t.ID, State: store.TaskPending,
 			URL: t.URL, Method: t.Method, Headers: t.Headers, Body: t.Body,
 			DispatchDeadline: t.DispatchDeadline, RetryOverride: t.RetryOverride,
-			ScheduleTime: t.ScheduleTime.UTC(), CreatedAt: now.UTC(),
+			ScheduleTime: t.ScheduleTime.UTC(), CreatedAt: created,
 		}}
 		if cur, ok := earliest[t.Queue]; !ok || t.ScheduleTime.Before(cur) {
 			earliest[t.Queue] = t.ScheduleTime
@@ -456,20 +479,22 @@ func (s *Store) ClaimTasks(ctx context.Context, now time.Time, leaseToken string
 	values := make([]string, len(budgets))
 	args := []any{}
 	for i, b := range budgets {
-		values[i] = fmt.Sprintf("($%d::bigint, $%d::int, $%d::timestamptz)", len(args)+1, len(args)+2, len(args)+3)
-		args = append(args, b.QueueID, b.N, nullableTime(b.PurgedAt))
+		values[i] = fmt.Sprintf("($%d::bigint, $%d::int)", len(args)+1, len(args)+2)
+		args = append(args, b.QueueID, b.N)
 	}
 	nowIdx := len(args) + 1
 	tokIdx := len(args) + 2
 	graceIdx := len(args) + 3
 	args = append(args, now.UTC(), leaseToken, leaseGrace.Seconds())
 
-	query := fmt.Sprintf(`WITH b(queue_id, n, purged_at) AS (VALUES %s),
+	// The purge watermark is read live from queues (not from the caller's
+	// cached config) so a purge is honored even if its change event was lost.
+	query := fmt.Sprintf(`WITH b(queue_id, n) AS (VALUES %s),
 c AS (
-  SELECT x.id FROM b CROSS JOIN LATERAL (
+  SELECT x.id FROM b JOIN queues bq ON bq.id = b.queue_id CROSS JOIN LATERAL (
     SELECT t.id FROM tasks t
     WHERE t.queue_id = b.queue_id AND t.state = 'pending' AND t.schedule_time <= $%d
-      AND (b.purged_at IS NULL OR t.created_at > b.purged_at)
+      AND (bq.purged_at IS NULL OR t.created_at > bq.purged_at)
     ORDER BY t.schedule_time LIMIT b.n
     FOR UPDATE SKIP LOCKED
   ) x

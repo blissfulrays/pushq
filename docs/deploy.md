@@ -38,6 +38,18 @@ api_keys:
   - { key: "pq_writer_<generate>", role: writer }
 ```
 
+> **First launch:** open `/ui/` and create the admin account before exposing
+> the server publicly — until then a server without `api_keys` accepts
+> anonymous requests. Serve the dashboard over HTTPS; behind a TLS-terminating
+> proxy, forward `X-Forwarded-Proto: https` so the session cookie is marked
+> `Secure`.
+
+> **Reverse proxies:** queue names in folders travel as `%2F` in the path
+> (`/v1/queues/user%2Finstagram`). The proxy must forward the path unmodified.
+> Caddy does by default; with nginx use `proxy_pass http://127.0.0.1:8080;`
+> with **no** URI part (a trailing `/` makes nginx decode `%2F` into `/`, which
+> then returns 404).
+
 ## docker-compose (Postgres, 2 replicas)
 
 ```yaml

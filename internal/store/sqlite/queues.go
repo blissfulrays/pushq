@@ -294,6 +294,11 @@ func (s *Store) PatchQueue(ctx context.Context, name string, p store.QueuePatch,
 		u.DeadLetterQueue = *p.DeadLetterQueue
 	}
 
+	if p.Validate != nil {
+		if err := p.Validate(u); err != nil {
+			return store.Queue{}, err
+		}
+	}
 	if sameConfig(q, u) && state == q.State {
 		return q, nil
 	}
@@ -435,7 +440,11 @@ func (s *Store) PurgeQueue(ctx context.Context, name string, now time.Time) (sto
 	}
 	defer tx.Rollback()
 	res, err := tx.ExecContext(ctx,
-		`UPDATE queues SET purged_at=?, config_version=config_version+1, updated_at=? WHERE name=?`,
+		// Cover every existing task even if the clock stepped backwards
+		// since it was created (CreateTasks stamps later tasks after this).
+		`UPDATE queues SET
+			purged_at = MAX(?, COALESCE((SELECT MAX(t.created_at) FROM tasks t WHERE t.queue_id = queues.id), 0)),
+			config_version=config_version+1, updated_at=? WHERE name=?`,
 		ms(now), ms(now), name)
 	if err != nil {
 		return store.Queue{}, err

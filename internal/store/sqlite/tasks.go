@@ -93,7 +93,18 @@ func getQueueRef(ctx context.Context, tx *sql.Tx, name string) (queueRef, error)
 	return ref, nil
 }
 
-func (s *Store) insertTask(ctx context.Context, tx *sql.Tx, ref queueRef, t store.NewTask, now time.Time) (int64, error) {
+// createdMS returns the creation time (unix ms) to record for a new task. It
+// is always strictly after the queue's purge watermark, so a task created in
+// the same millisecond as a purge is not hidden by it.
+func (ref queueRef) createdMS(now time.Time) int64 {
+	c := ms(now)
+	if ref.purgedMS >= 0 && c <= ref.purgedMS {
+		c = ref.purgedMS + 1
+	}
+	return c
+}
+
+func (s *Store) insertTask(ctx context.Context, tx *sql.Tx, ref queueRef, t store.NewTask, createdMS int64) (int64, error) {
 	headers, err := jsonOrNil(t.Headers)
 	if err != nil {
 		return 0, err
@@ -103,17 +114,17 @@ func (s *Store) insertTask(ctx context.Context, tx *sql.Tx, ref queueRef, t stor
 		return 0, err
 	}
 	args := []any{ref.id, t.ID, t.URL, t.Method, headers, t.Body,
-		t.DispatchDeadline.Milliseconds(), override, ms(t.ScheduleTime), ms(now)}
+		t.DispatchDeadline.Milliseconds(), override, ms(t.ScheduleTime), createdMS}
 	const q = `INSERT INTO tasks (queue_id, task_id, url, method, headers, body,
 		dispatch_deadline_ms, retry_override, schedule_time, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)`
 	res, err := tx.ExecContext(ctx, q, args...)
 	if isUniqueViolation(err) {
 		// A row at or before the purge watermark is doomed; free the ID now
 		// so purge is exact even before the hard-deleter catches up.
-		var pk, createdMS int64
+		var pk, existingMS int64
 		serr := tx.QueryRowContext(ctx,
-			`SELECT id, created_at FROM tasks WHERE queue_id=? AND task_id=?`, ref.id, t.ID).Scan(&pk, &createdMS)
-		if serr != nil || ref.purgedMS < 0 || createdMS > ref.purgedMS {
+			`SELECT id, created_at FROM tasks WHERE queue_id=? AND task_id=?`, ref.id, t.ID).Scan(&pk, &existingMS)
+		if serr != nil || ref.purgedMS < 0 || existingMS > ref.purgedMS {
 			return 0, store.ErrAlreadyExists
 		}
 		if _, derr := tx.ExecContext(ctx, `DELETE FROM tasks WHERE id=?`, pk); derr != nil {
@@ -185,7 +196,8 @@ func (s *Store) CreateTasks(ctx context.Context, ts []store.NewTask, now time.Ti
 			continue
 		}
 
-		pk, ierr := s.insertTask(ctx, tx, ref, t, now)
+		createdMS := ref.createdMS(now)
+		pk, ierr := s.insertTask(ctx, tx, ref, t, createdMS)
 		if ierr != nil {
 			results[i] = store.TaskResult{Err: ierr}
 			continue
@@ -194,7 +206,7 @@ func (s *Store) CreateTasks(ctx context.Context, ts []store.NewTask, now time.Ti
 			PK: pk, QueueID: ref.id, Queue: t.Queue, ID: t.ID, State: store.TaskPending,
 			URL: t.URL, Method: t.Method, Headers: t.Headers, Body: t.Body,
 			DispatchDeadline: t.DispatchDeadline, RetryOverride: t.RetryOverride,
-			ScheduleTime: t.ScheduleTime.UTC(), CreatedAt: now.UTC(),
+			ScheduleTime: t.ScheduleTime.UTC(), CreatedAt: time.UnixMilli(createdMS).UTC(),
 		}}
 		if cur, ok := earliest[t.Queue]; !ok || t.ScheduleTime.Before(cur) {
 			earliest[t.Queue] = t.ScheduleTime
@@ -436,13 +448,11 @@ func (s *Store) ClaimTasks(ctx context.Context, now time.Time, leaseToken string
 		if b.N <= 0 {
 			continue
 		}
-		var purgedMS int64 = -1
-		if b.PurgedAt != nil {
-			purgedMS = ms(*b.PurgedAt)
-		}
+		// Purge watermark read live, not from the caller's cached config.
 		rows, err := tx.QueryContext(ctx, `SELECT id FROM tasks
-			WHERE queue_id=? AND state='pending' AND schedule_time <= ? AND created_at > ?
-			ORDER BY schedule_time LIMIT ?`, b.QueueID, ms(now), purgedMS, b.N)
+			WHERE queue_id=? AND state='pending' AND schedule_time <= ?
+			AND created_at > COALESCE((SELECT purged_at FROM queues WHERE id=?), -1)
+			ORDER BY schedule_time LIMIT ?`, b.QueueID, ms(now), b.QueueID, b.N)
 		if err != nil {
 			return nil, err
 		}

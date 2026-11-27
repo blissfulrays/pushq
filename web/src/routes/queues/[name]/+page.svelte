@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
-	import { base } from '$app/paths';
 	import { page } from '$app/state';
 	import { api, errorMessage, type Queue, type QueueStats, type Task } from '$lib/api';
 	import { auth } from '$lib/auth.svelte';
@@ -11,6 +10,8 @@
 	import Tabs from '$lib/components/ui/tabs/tabs.svelte';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 	import ErrorAlert from '$lib/components/ErrorAlert.svelte';
+	import FolderCrumbs from '$lib/components/FolderCrumbs.svelte';
+	import { folderOf, leafOf, queueHref } from '$lib/folders';
 	import StatCard from '$lib/components/StatCard.svelte';
 	import StateBadge from '$lib/components/StateBadge.svelte';
 	import TimeStamp from '$lib/components/TimeStamp.svelte';
@@ -119,7 +120,7 @@
 	}
 
 	function openTask(id: string) {
-		goto(`${base}/queues/${encodeURIComponent(name)}/tasks/${encodeURIComponent(id)}`);
+		goto(`${queueHref(name)}/tasks/${encodeURIComponent(id)}`);
 	}
 
 	const targetSummary = $derived.by(() => {
@@ -171,24 +172,28 @@
 <div class="space-y-6">
 	<div class="flex flex-wrap items-center justify-between gap-3">
 		<div class="min-w-0">
-			<a href="{base}/" class="text-xs text-muted-foreground hover:text-foreground">&larr; queues</a>
+			<FolderCrumbs folder={folderOf(name)} />
 			<div class="mt-1 flex items-center gap-3">
-				<h1 class="truncate font-mono text-xl font-semibold tracking-tight">{name}</h1>
+				<h1 class="truncate font-mono text-xl font-semibold tracking-tight" title={name}>
+					{leafOf(name)}
+				</h1>
 				{#if queue}
 					<StateBadge kind="queue" state={queue.state} />
 				{/if}
 			</div>
 		</div>
-		<div class="flex items-center gap-2">
-			{#if queue}
-				<Button variant="outline" size="sm" disabled={busy} onclick={togglePause}>
-					{queue.state === 'running' ? 'Pause' : 'Resume'}
+		{#if auth.can.write}
+			<div class="flex items-center gap-2">
+				{#if queue}
+					<Button variant="outline" size="sm" disabled={busy} onclick={togglePause}>
+						{queue.state === 'running' ? 'Pause' : 'Resume'}
+					</Button>
+				{/if}
+				<Button variant="destructive" size="sm" disabled={busy} onclick={() => (purgeOpen = true)}>
+					Purge
 				</Button>
-			{/if}
-			<Button variant="destructive" size="sm" disabled={busy} onclick={() => (purgeOpen = true)}>
-				Purge
-			</Button>
-		</div>
+			</div>
+		{/if}
 	</div>
 
 	<ErrorAlert message={actionError} />
@@ -240,7 +245,7 @@
 							{#if queue.dead_letter_queue}
 								<a
 									class="font-mono text-xs underline underline-offset-4"
-									href={`${base}/queues/${encodeURIComponent(queue.dead_letter_queue)}`}
+									href={queueHref(queue.dead_letter_queue)}
 								>
 									{queue.dead_letter_queue}
 								</a>
