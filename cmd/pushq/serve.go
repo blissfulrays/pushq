@@ -24,6 +24,7 @@ import (
 	"github.com/blissfulrays/pushq/internal/store/postgres"
 	"github.com/blissfulrays/pushq/internal/store/sqlite"
 	"github.com/blissfulrays/pushq/internal/version"
+	"github.com/blissfulrays/pushq/internal/workos"
 )
 
 func serveCmd() *cobra.Command {
@@ -129,22 +130,37 @@ func runServe(ctx context.Context, cfg config.Config, dev bool) error {
 	}
 	authn := auth.New(cfg.APIKeys, acc, dev)
 
+	// WorkOS configured = SaaS mode: WorkOS is the only sign-in, teams are
+	// WorkOS Organizations, and every team's data is isolated.
+	var wos *workos.Client
+	if cfg.WorkOS.Enabled() && acc != nil && !dev {
+		wos = &workos.Client{ClientID: cfg.WorkOS.ClientID, APIKey: cfg.WorkOS.APIKey, BaseURL: cfg.WorkOS.APIBase}
+		authn.EnableSaaS()
+		logger.Info("SaaS mode: WorkOS sign-in, one isolated workspace per team",
+			"client_id", cfg.WorkOS.ClientID,
+			"redirect_uri", firstNonEmpty(cfg.WorkOS.RedirectURI, "<origin>/v1/auth/workos/callback"))
+	}
+
 	srv := &api.Server{
-		Store:          st,
-		Auth:           authn,
-		Accounts:       acc,
-		Log:            logger,
-		Limits:         cfg.Limits,
-		MetricsPublic:  cfg.Metrics.Public,
-		MetricsHandler: reg.Handler(),
-		Now:            time.Now,
-		Role:           disp.Role,
+		Store:    st,
+		Auth:     authn,
+		Accounts: acc,
+
+		WorkOS:            wos,
+		WorkOSRedirectURI: cfg.WorkOS.RedirectURI,
+		Log:               logger,
+		Limits:            cfg.Limits,
+		MetricsPublic:     cfg.Metrics.Public,
+		MetricsHandler:    reg.Handler(),
+		Now:               time.Now,
+		Role:              disp.Role,
 	}
 	switch open, err := authn.IsOpen(ctx); {
 	case err != nil:
 		return fmt.Errorf("check accounts: %w", err)
 	case dev:
 		logger.Warn("dev mode: authentication is disabled")
+	case wos != nil:
 	case open:
 		logger.Warn("no API keys and no dashboard accounts yet — the API is UNAUTHENTICATED. " +
 			"Open the dashboard at /ui/ to create the first admin account (this locks the API), " +
@@ -183,4 +199,13 @@ func runServe(ctx context.Context, cfg config.Config, dev bool) error {
 	_ = httpSrv.Shutdown(shutdownCtx)
 	disp.Stop()
 	return nil
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }

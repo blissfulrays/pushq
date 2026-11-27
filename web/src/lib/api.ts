@@ -203,6 +203,19 @@ export function absoluteLink(path: string): string {
 	return `${window.location.origin}${path}`;
 }
 
+/** Where SaaS sign-in starts (a full-page navigation to WorkOS). */
+export function workosLoginUrl(next?: string): string {
+	const q = next ? `?next=${encodeURIComponent(next)}` : '';
+	return `${window.location.origin}/v1/auth/workos/login${q}`;
+}
+
+export const teamsApi = {
+	list: () => request<{ teams: { id: number; name: string; role: Role }[] }>('/v1/teams'),
+	create: (name: string) => request<{ id: number; name: string; role: Role }>('/v1/teams', json('POST', { name })),
+	switchTo: (id: number) => request<void>(`/v1/teams/${id}:switch`, { method: 'POST' }),
+	renameCurrent: (name: string) => request<{ id: number; name: string }>('/v1/teams/current', json('PATCH', { name }))
+};
+
 export const accountsApi = {
 	setup: (body: { email: string; name: string; password: string; api_key?: string }) =>
 		request<{ user: User }>('/v1/auth/setup', json('POST', body)),
@@ -224,8 +237,9 @@ export const accountsApi = {
 		request<{ link: Invite; path: string }>(`/v1/users/${id}/reset-link`, { method: 'POST' }),
 
 	listInvites: () => request<{ invites: Invite[] }>('/v1/invites'),
+	/** Self-hosted: returns a link to share. SaaS: WorkOS emails it (emailed: true). */
 	createInvite: (email: string, role: Role) =>
-		request<{ invite: Invite; path: string }>('/v1/invites', json('POST', { email, role })),
+		request<{ invite: Invite; path?: string; emailed?: boolean }>('/v1/invites', json('POST', { email, role })),
 	deleteInvite: (id: number) => request<void>(`/v1/invites/${id}`, { method: 'DELETE' }),
 
 	listKeys: () => request<{ keys: ApiKey[]; config_keys: number }>('/v1/api-keys'),

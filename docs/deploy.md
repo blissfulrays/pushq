@@ -125,3 +125,45 @@ usually bounded by your receivers.
 SQLite: back up the `.db` file (WAL mode — use `sqlite3 .backup` or stop the
 service). Postgres: normal `pg_dump`. All state lives in three tables
 (`queues`, `tasks`, `task_attempts`).
+
+## SaaS mode (WorkOS)
+
+Set `WORKOS_CLIENT_ID` and `WORKOS_API_KEY` (environment, or a `.env` file
+next to where `pushq serve` runs; see `.env.example`) and pushq becomes
+multi-tenant:
+
+- **Sign-in is WorkOS AuthKit only.** No setup screen, no local passwords.
+  AuthKit's hosted pages handle sign-up, password reset, social login and MFA.
+- **Teams are WorkOS Organizations.** A new user creates a team; admins invite
+  people from *Settings → Team* and WorkOS emails the invitation. A person can
+  belong to several teams and switch between them in the account menu.
+- **Each team's data is isolated.** Queues, tasks, attempts, stats and API keys
+  are scoped to the team; two teams can both have a queue called `emails`.
+  Internally a team's queues are stored as `<namespace>:<name>`, which no
+  client-supplied name can reach, and receivers only ever see the short name.
+- **Roles live in pushq** (admin / member / viewer, per team). In WorkOS a
+  pushq admin is an organization `admin` and members and viewers are `member`.
+- **Config-file `api_keys` are operator keys**: not tied to a team, they see
+  every team's queues and can read `/metrics` (which team users can't, since it
+  names every team's queues). Keep them for your own tooling.
+
+### WorkOS dashboard checklist
+
+1. **Redirects → Sign-in callback**: add
+   `https://<your-pushq-host>/v1/auth/workos/callback`
+   (for local testing in the staging environment:
+   `http://localhost:8080/v1/auth/workos/callback`). If pushq sits behind a
+   proxy that changes the host or scheme, set `WORKOS_REDIRECT_URI` to the
+   exact URL instead.
+2. **Authentication → Sign up**: allow sign-ups, so new customers can create
+   accounts.
+3. **Roles**: keep the default `admin` and `member` roles (pushq uses those
+   slugs; if `admin` is missing it falls back to the default role).
+4. Use the **staging** environment while testing; it's free.
+
+Pushq re-syncs a person's teams from WorkOS every time they sign in, and a
+team's members whenever its Team page is opened, so changes made directly in
+the WorkOS dashboard are picked up.
+
+Switching an existing self-hosted server to SaaS mode leaves its existing
+queues untouched but outside every team (only operator keys see them).

@@ -1,5 +1,7 @@
 <script lang="ts">
-	import { accountsApi, errorMessage } from '$lib/api';
+	import { onMount } from 'svelte';
+	import { page } from '$app/state';
+	import { accountsApi, errorMessage, workosLoginUrl } from '$lib/api';
 	import { auth } from '$lib/auth.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -12,7 +14,17 @@
 	let key = $state('');
 	let useKey = $state(false);
 	let busy = $state(false);
-	let error = $state<string | null>(null);
+	let error = $state<string | null>(page.url.searchParams.get('error'));
+
+	// SaaS: WorkOS is the only way in. Go straight there unless we're showing
+	// why the last attempt failed.
+	const next = $derived(page.url.searchParams.get('next') ?? '');
+	function continueToWorkOS() {
+		window.location.href = workosLoginUrl(next || undefined);
+	}
+	onMount(() => {
+		if (auth.saas && !error) continueToWorkOS();
+	});
 
 	async function submit(e: SubmitEvent) {
 		e.preventDefault();
@@ -43,6 +55,18 @@
 	<title>Sign in · pushq</title>
 </svelte:head>
 
+{#if auth.saas}
+	<AuthCard title="Sign in to pushq" description="Sign in or create an account to manage your team's queues.">
+		<div class="space-y-4">
+			<ErrorAlert message={error} />
+			{#if error}
+				<Button class="w-full" onclick={continueToWorkOS}>Try again</Button>
+			{:else}
+				<p class="text-center text-sm text-muted-foreground">Redirecting…</p>
+			{/if}
+		</div>
+	</AuthCard>
+{:else}
 <AuthCard
 	title="Sign in"
 	description={useKey ? 'Use an API key for this browser tab only.' : 'Sign in to manage your queues.'}
@@ -79,3 +103,4 @@
 		{/if}
 	</form>
 </AuthCard>
+{/if}

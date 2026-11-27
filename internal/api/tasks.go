@@ -11,7 +11,7 @@ import (
 const maxBatchTasks = 500
 
 func (s *Server) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
-	queue := queueParam(r)
+	queue := inName(r, queueParam(r))
 	var body types.TaskCreate
 	// Body limit: task body is base64 (4/3 overhead) plus envelope.
 	if err := s.decodeJSON(w, r, &body, s.Limits.MaxBodyBytes*2+(64<<10)); err != nil {
@@ -34,11 +34,11 @@ func (s *Server) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, taskToResponse(t))
+	writeJSON(w, http.StatusCreated, taskOut(r, t))
 }
 
 func (s *Server) handleTaskBatch(w http.ResponseWriter, r *http.Request) {
-	queue := queueParam(r)
+	queue := inName(r, queueParam(r))
 	var body types.TaskBatchCreate
 	if err := s.decodeJSON(w, r, &body, 8<<20); err != nil {
 		s.writeErr(w, r, err)
@@ -83,7 +83,7 @@ func (s *Server) handleTaskBatch(w http.ResponseWriter, r *http.Request) {
 			if res.Err != nil {
 				results[i] = types.BatchResult{Index: i, Error: s.batchError(r, res.Err)}
 			} else {
-				t := taskToResponse(res.Task)
+				t := taskOut(r, res.Task)
 				results[i] = types.BatchResult{Index: i, Task: &t}
 			}
 		}
@@ -108,7 +108,7 @@ func (s *Server) batchError(r *http.Request, err error) *types.BatchError {
 		s.Log.Error("batch item failed", "path", r.URL.Path, "err", err)
 		return &types.BatchError{Code: code, Detail: "internal error"}
 	}
-	return &types.BatchError{Code: code, Detail: err.Error()}
+	return &types.BatchError{Code: code, Detail: scrub(r, err.Error())}
 }
 
 func (s *Server) handleTaskGet(w http.ResponseWriter, r *http.Request) {
@@ -116,18 +116,18 @@ func (s *Server) handleTaskGet(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("view") == "full" {
 		view = store.ViewFull
 	}
-	t, err := s.Store.GetTask(r.Context(), queueParam(r), taskParam(r), view)
+	t, err := s.Store.GetTask(r.Context(), inName(r, queueParam(r)), taskParam(r), view)
 	if err != nil {
 		s.writeErr(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, taskToResponse(t))
+	writeJSON(w, http.StatusOK, taskOut(r, t))
 }
 
 func (s *Server) handleTaskList(w http.ResponseWriter, r *http.Request) {
 	qp := r.URL.Query()
 	opts := store.ListTasksOpts{
-		Queue:     queueParam(r),
+		Queue:     inName(r, queueParam(r)),
 		IDPrefix:  qp.Get("id_prefix"),
 		PageToken: qp.Get("page_token"),
 		View:      store.ViewBasic,
@@ -160,13 +160,13 @@ func (s *Server) handleTaskList(w http.ResponseWriter, r *http.Request) {
 	}
 	out := types.TaskList{Tasks: []types.TaskResponse{}, NextPageToken: next}
 	for _, t := range tasks {
-		out.Tasks = append(out.Tasks, taskToResponse(t))
+		out.Tasks = append(out.Tasks, taskOut(r, t))
 	}
 	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) handleTaskDelete(w http.ResponseWriter, r *http.Request) {
-	err := s.Store.DeleteTask(r.Context(), queueParam(r), taskParam(r), s.Now())
+	err := s.Store.DeleteTask(r.Context(), inName(r, queueParam(r)), taskParam(r), s.Now())
 	if err != nil {
 		s.writeErr(w, r, err)
 		return
@@ -175,16 +175,16 @@ func (s *Server) handleTaskDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleTaskRun(w http.ResponseWriter, r *http.Request) {
-	t, err := s.Store.ForceRun(r.Context(), queueParam(r), taskParam(r), s.Now())
+	t, err := s.Store.ForceRun(r.Context(), inName(r, queueParam(r)), taskParam(r), s.Now())
 	if err != nil {
 		s.writeErr(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, taskToResponse(t))
+	writeJSON(w, http.StatusOK, taskOut(r, t))
 }
 
 func (s *Server) handleAttemptsList(w http.ResponseWriter, r *http.Request) {
-	attempts, err := s.Store.ListAttempts(r.Context(), queueParam(r), taskParam(r))
+	attempts, err := s.Store.ListAttempts(r.Context(), inName(r, queueParam(r)), taskParam(r))
 	if err != nil {
 		s.writeErr(w, r, err)
 		return

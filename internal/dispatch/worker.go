@@ -155,7 +155,8 @@ func (d *Dispatcher) buildRequest(t store.Task, q store.Queue, now time.Time) (*
 
 	// System headers always win.
 	req.Header.Set("User-Agent", "pushq/"+version.Version)
-	req.Header.Set("X-Pushq-Queue", t.Queue)
+	// Receivers see the queue name their team uses, never the namespace.
+	req.Header.Set("X-Pushq-Queue", store.DisplayQueueName(t.Queue))
 	req.Header.Set("X-Pushq-Task-Id", t.ID)
 	req.Header.Set("X-Pushq-Attempt", strconv.Itoa(t.DispatchCount))
 	req.Header.Set("X-Pushq-Execution-Count", strconv.Itoa(t.ResponseCount))
@@ -163,7 +164,7 @@ func (d *Dispatcher) buildRequest(t store.Task, q store.Queue, now time.Time) (*
 
 	if q.Target.SigningSecret != "" {
 		// webhook-id stays stable across retries so receivers can dedup.
-		signed, err := auth.SignedHeaders(q.Target.SigningSecret, t.Queue+"/"+t.ID, now, body)
+		signed, err := auth.SignedHeaders(q.Target.SigningSecret, store.DisplayQueueName(t.Queue)+"/"+t.ID, now, body)
 		if err != nil {
 			return nil, fmt.Errorf("sign request: %w", err)
 		}
@@ -245,7 +246,7 @@ func (d *Dispatcher) deadLetter(ctx context.Context, t store.Task, q store.Queue
 	for k, v := range t.Headers {
 		headers[k] = v
 	}
-	headers["X-Pushq-Deadletter-Source-Queue"] = t.Queue
+	headers["X-Pushq-Deadletter-Source-Queue"] = store.DisplayQueueName(t.Queue)
 	headers["X-Pushq-Deadletter-Task-Id"] = t.ID
 	if att.ResponseStatus != 0 {
 		headers["X-Pushq-Deadletter-Final-Status"] = strconv.Itoa(att.ResponseStatus)

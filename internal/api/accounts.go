@@ -84,6 +84,14 @@ type sessionResponse struct {
 	User             *userDTO `json:"user,omitempty"`
 	KeyName          string   `json:"key_name,omitempty"`
 	Permissions      permsDTO `json:"permissions"`
+	// SSOProviders lists single sign-on options for the sign-in page ("workos").
+	SSOProviders []string `json:"sso_providers"`
+
+	// SaaS mode: the team this session works in, the user's teams, and
+	// whether they still need to create or pick one.
+	Team      *teamDTO  `json:"team,omitempty"`
+	Teams     []teamDTO `json:"teams,omitempty"`
+	NeedsTeam bool      `json:"needs_team"`
 }
 
 // invitePath is the dashboard route that accepts invite and reset links. The
@@ -191,6 +199,26 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 	out.SetupRequiresKey = out.SetupRequired && s.Auth.HasConfigKeys()
+	out.SSOProviders = []string{}
+	if s.saas() {
+		out.Mode = "saas"
+		out.SetupRequired, out.SetupRequiresKey = false, false
+		out.SSOProviders = append(out.SSOProviders, "workos")
+		if p.Team != nil {
+			out.Team = &teamDTO{ID: p.Team.ID, Name: p.Team.Name, Role: p.Role}
+		}
+		if p.User != nil {
+			teams, err := s.Accounts.UserTeams(r.Context(), p.User.ID)
+			if err != nil {
+				s.writeErr(w, r, err)
+				return
+			}
+			for _, t := range teams {
+				out.Teams = append(out.Teams, teamDTO{ID: t.Team.ID, Name: t.Team.Name, Role: string(t.Role)})
+			}
+			out.NeedsTeam = p.Team == nil
+		}
+	}
 	switch {
 	case s.Auth.Dev():
 		out.Mode = "dev"
@@ -225,7 +253,7 @@ func (s *Server) signIn(w http.ResponseWriter, r *http.Request, u accounts.User,
 // exists; if config-file API keys protect the server, an admin key is
 // required too (otherwise anyone reaching the dashboard could claim it).
 func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
-	if !s.accountsOr404(w, r) || s.rateLimited(w, r) {
+	if !s.accountsOr404(w, r) || !s.selfHostedOnly(w, r) || s.rateLimited(w, r) {
 		return
 	}
 	var body credentialsBody
@@ -254,7 +282,7 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
-	if !s.accountsOr404(w, r) || s.rateLimited(w, r) {
+	if !s.accountsOr404(w, r) || !s.selfHostedOnly(w, r) || s.rateLimited(w, r) {
 		return
 	}
 	var body credentialsBody
@@ -282,7 +310,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleInviteGet(w http.ResponseWriter, r *http.Request) {
-	if !s.accountsOr404(w, r) {
+	if !s.accountsOr404(w, r) || !s.selfHostedOnly(w, r) {
 		return
 	}
 	inv, err := s.Accounts.LookupInvite(r.Context(), chi.URLParam(r, "token"), s.Now())
@@ -294,7 +322,7 @@ func (s *Server) handleInviteGet(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleInviteAccept(w http.ResponseWriter, r *http.Request) {
-	if !s.accountsOr404(w, r) || s.rateLimited(w, r) {
+	if !s.accountsOr404(w, r) || !s.selfHostedOnly(w, r) || s.rateLimited(w, r) {
 		return
 	}
 	var body credentialsBody
@@ -329,7 +357,7 @@ func (s *Server) handleMePatch(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleMePassword(w http.ResponseWriter, r *http.Request) {
-	if s.rateLimited(w, r) {
+	if !s.selfHostedOnly(w, r) || s.rateLimited(w, r) {
 		return
 	}
 	var body struct {
@@ -351,6 +379,10 @@ func (s *Server) handleMePassword(w http.ResponseWriter, r *http.Request) {
 // --- team ---
 
 func (s *Server) handleUserList(w http.ResponseWriter, r *http.Request) {
+	if s.saas() {
+		s.saasUserList(w, r)
+		return
+	}
 	users, err := s.Accounts.ListUsers(r.Context())
 	if err != nil {
 		s.writeErr(w, r, err)
@@ -377,6 +409,10 @@ func (s *Server) handleUserPatch(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, r, err)
 		return
 	}
+	if s.saas() {
+		s.saasUserPatch(w, r, id, body.Role)
+		return
+	}
 	u, err := s.Accounts.UpdateUser(r.Context(), id, body.Name, body.Role, s.Now())
 	if err != nil {
 		s.writeErr(w, r, err)
@@ -391,6 +427,10 @@ func (s *Server) handleUserDelete(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, r, err)
 		return
 	}
+	if s.saas() {
+		s.saasUserDelete(w, r, id)
+		return
+	}
 	if err := s.Accounts.DeleteUser(r.Context(), id); err != nil {
 		s.writeErr(w, r, err)
 		return
@@ -399,6 +439,9 @@ func (s *Server) handleUserDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUserResetLink(w http.ResponseWriter, r *http.Request) {
+	if !s.selfHostedOnly(w, r) {
+		return
+	}
 	id, err := pathID(r)
 	if err != nil {
 		s.writeErr(w, r, err)
@@ -413,6 +456,10 @@ func (s *Server) handleUserResetLink(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleInviteList(w http.ResponseWriter, r *http.Request) {
+	if s.saas() {
+		s.saasInviteList(w, r)
+		return
+	}
 	invs, err := s.Accounts.ListInvites(r.Context(), s.Now())
 	if err != nil {
 		s.writeErr(w, r, err)
@@ -434,6 +481,10 @@ func (s *Server) handleInviteCreate(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, r, err)
 		return
 	}
+	if s.saas() {
+		s.saasInviteCreate(w, r, body.Email, body.Role)
+		return
+	}
 	token, inv, err := s.Accounts.CreateInvite(r.Context(), body.Email, body.Role, createdBy(principal(r)), s.Now())
 	if err != nil {
 		s.writeErr(w, r, err)
@@ -448,6 +499,10 @@ func (s *Server) handleInviteDelete(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, r, err)
 		return
 	}
+	if s.saas() {
+		s.saasInviteDelete(w, r, id)
+		return
+	}
 	if err := s.Accounts.DeleteInvite(r.Context(), id); err != nil {
 		s.writeErr(w, r, err)
 		return
@@ -458,7 +513,7 @@ func (s *Server) handleInviteDelete(w http.ResponseWriter, r *http.Request) {
 // --- API keys ---
 
 func (s *Server) handleKeyList(w http.ResponseWriter, r *http.Request) {
-	keys, err := s.Accounts.ListAPIKeys(r.Context())
+	keys, err := s.Accounts.ListAPIKeys(r.Context(), teamID(principal(r)))
 	if err != nil {
 		s.writeErr(w, r, err)
 		return
@@ -467,7 +522,11 @@ func (s *Server) handleKeyList(w http.ResponseWriter, r *http.Request) {
 	for i, k := range keys {
 		out[i] = toKeyDTO(k)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"keys": out, "config_keys": s.Auth.ConfigKeyCount()})
+	cfgKeys := s.Auth.ConfigKeyCount()
+	if s.saas() {
+		cfgKeys = 0 // the operator's keys aren't the team's business
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"keys": out, "config_keys": cfgKeys})
 }
 
 func (s *Server) handleKeyCreate(w http.ResponseWriter, r *http.Request) {
@@ -479,7 +538,7 @@ func (s *Server) handleKeyCreate(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, r, err)
 		return
 	}
-	secret, k, err := s.Accounts.CreateAPIKey(r.Context(), body.Name, body.Role, createdBy(principal(r)), s.Now())
+	secret, k, err := s.Accounts.CreateAPIKey(r.Context(), teamID(principal(r)), body.Name, body.Role, createdBy(principal(r)), s.Now())
 	if err != nil {
 		s.writeErr(w, r, err)
 		return
@@ -496,7 +555,7 @@ func (s *Server) handleKeyDelete(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, r, err)
 		return
 	}
-	if err := s.Accounts.DeleteAPIKey(r.Context(), id); err != nil {
+	if err := s.Accounts.DeleteAPIKey(r.Context(), teamID(principal(r)), id); err != nil {
 		s.writeErr(w, r, err)
 		return
 	}

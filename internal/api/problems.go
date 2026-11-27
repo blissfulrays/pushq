@@ -38,7 +38,7 @@ func writeProblem(w http.ResponseWriter, r *http.Request, status int, code, deta
 		Title:    http.StatusText(status),
 		Status:   status,
 		Code:     code,
-		Detail:   detail,
+		Detail:   scrub(r, detail), // never reveal a team's internal namespace
 		Instance: r.URL.Path,
 	})
 }

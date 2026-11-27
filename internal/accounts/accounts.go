@@ -90,6 +90,7 @@ type Invite struct {
 
 type APIKey struct {
 	ID             int64
+	TeamID         int64 // 0 = not team-scoped (self-hosted)
 	Name           string
 	Prefix         string // first characters of the key, for recognition
 	Role           KeyRole
@@ -453,14 +454,23 @@ func (s *Store) ChangePassword(ctx context.Context, id int64, current, next, kee
 
 // CreateSession signs a user in and returns the secret cookie value.
 func (s *Store) CreateSession(ctx context.Context, userID int64, now time.Time) (token string, expires time.Time, err error) {
+	return s.CreateTeamSession(ctx, userID, 0, now)
+}
+
+// CreateTeamSession signs a user in with a current team (SaaS mode; 0 = none).
+func (s *Store) CreateTeamSession(ctx context.Context, userID, teamID int64, now time.Time) (token string, expires time.Time, err error) {
 	token = newSecret("pqs_", 32)
 	expires = now.Add(SessionTTL)
 	// Opportunistically drop expired sessions; the table stays small.
 	if _, err := s.w.ExecContext(ctx, s.q(`DELETE FROM sessions WHERE expires_at <= ?`), ms(now)); err != nil {
 		return "", time.Time{}, err
 	}
-	_, err = s.w.ExecContext(ctx, s.q(`INSERT INTO sessions (token_hash, user_id, created_at, expires_at) VALUES (?,?,?,?)`),
-		digest(token), userID, ms(now), ms(expires))
+	var team any
+	if teamID > 0 {
+		team = teamID
+	}
+	_, err = s.w.ExecContext(ctx, s.q(`INSERT INTO sessions (token_hash, user_id, created_at, expires_at, team_id) VALUES (?,?,?,?,?)`),
+		digest(token), userID, ms(now), ms(expires), team)
 	return token, expires, err
 }
 
@@ -468,29 +478,36 @@ func (s *Store) CreateSession(ctx context.Context, userID int64, now time.Time) 
 // in the second half of its lifetime is extended. renewed is the new expiry
 // when that happened (so the cookie can be refreshed too).
 func (s *Store) SessionUser(ctx context.Context, token string, now time.Time) (u User, renewed *time.Time, err error) {
+	u, _, renewed, err = s.Session(ctx, token, now)
+	return u, renewed, err
+}
+
+// Session is SessionUser plus the session's current team (0 = none).
+func (s *Store) Session(ctx context.Context, token string, now time.Time) (u User, teamID int64, renewed *time.Time, err error) {
 	var sid, expMS int64
 	var created int64
-	var lastLogin sql.NullInt64
-	err = s.r.QueryRowContext(ctx, s.q(`SELECT s.id, s.expires_at, u.id, u.email, u.name, u.role, u.created_at, u.last_login_at
+	var lastLogin, team sql.NullInt64
+	err = s.r.QueryRowContext(ctx, s.q(`SELECT s.id, s.expires_at, s.team_id, u.id, u.email, u.name, u.role, u.created_at, u.last_login_at
 		FROM sessions s JOIN users u ON u.id = s.user_id
 		WHERE s.token_hash=? AND s.expires_at > ?`), digest(token), ms(now)).
-		Scan(&sid, &expMS, &u.ID, &u.Email, &u.Name, &u.Role, &created, &lastLogin)
+		Scan(&sid, &expMS, &team, &u.ID, &u.Email, &u.Name, &u.Role, &created, &lastLogin)
 	if errors.Is(err, sql.ErrNoRows) {
-		return User{}, nil, ErrBadCredentials
+		return User{}, 0, nil, ErrBadCredentials
 	}
 	if err != nil {
-		return User{}, nil, err
+		return User{}, 0, nil, err
 	}
+	teamID = team.Int64
 	u.CreatedAt = fromMS(created)
 	u.LastLoginAt = optMS(lastLogin)
 	if fromMS(expMS).Sub(now) < sessionRenewAt {
 		exp := now.Add(SessionTTL)
 		if _, err := s.w.ExecContext(ctx, s.q(`UPDATE sessions SET expires_at=? WHERE id=?`), ms(exp), sid); err != nil {
-			return User{}, nil, err
+			return User{}, 0, nil, err
 		}
 		renewed = &exp
 	}
-	return u, renewed, nil
+	return u, teamID, renewed, nil
 }
 
 func (s *Store) DeleteSession(ctx context.Context, token string) error {
@@ -716,7 +733,7 @@ func (s *Store) AcceptInvite(ctx context.Context, token, name, password string, 
 
 // CreateAPIKey returns the plaintext key; only its digest is stored, so it
 // can never be shown again.
-func (s *Store) CreateAPIKey(ctx context.Context, name string, role KeyRole, createdBy *int64, now time.Time) (string, APIKey, error) {
+func (s *Store) CreateAPIKey(ctx context.Context, teamID int64, name string, role KeyRole, createdBy *int64, now time.Time) (string, APIKey, error) {
 	name = strings.TrimSpace(name)
 	if name == "" || len([]rune(name)) > 100 {
 		return "", APIKey{}, invalid("key name must be 1-100 characters")
@@ -727,17 +744,23 @@ func (s *Store) CreateAPIKey(ctx context.Context, name string, role KeyRole, cre
 	key := newSecret("pq_", 24)
 	prefix := key[:11]
 	var id int64
-	err := s.w.QueryRowContext(ctx, s.q(`INSERT INTO api_keys (name, prefix, key_hash, role, created_by, created_at)
-		VALUES (?,?,?,?,?,?) RETURNING id`), name, prefix, digest(key), string(role), createdBy, ms(now)).Scan(&id)
+	var team any
+	if teamID > 0 {
+		team = teamID
+	}
+	err := s.w.QueryRowContext(ctx, s.q(`INSERT INTO api_keys (name, prefix, key_hash, role, created_by, created_at, team_id)
+		VALUES (?,?,?,?,?,?,?) RETURNING id`), name, prefix, digest(key), string(role), createdBy, ms(now), team).Scan(&id)
 	if err != nil {
 		return "", APIKey{}, err
 	}
-	return key, APIKey{ID: id, Name: name, Prefix: prefix, Role: role, CreatedAt: fromMS(ms(now))}, nil
+	return key, APIKey{ID: id, TeamID: teamID, Name: name, Prefix: prefix, Role: role, CreatedAt: fromMS(ms(now))}, nil
 }
 
-func (s *Store) ListAPIKeys(ctx context.Context) ([]APIKey, error) {
-	rows, err := s.r.QueryContext(ctx, `SELECT k.id, k.name, k.prefix, k.role, COALESCE(u.email, ''), k.created_at, k.last_used_at
-		FROM api_keys k LEFT JOIN users u ON u.id = k.created_by ORDER BY k.created_at DESC`)
+// ListAPIKeys lists one team's keys (teamID 0 = the self-hosted, unscoped keys).
+func (s *Store) ListAPIKeys(ctx context.Context, teamID int64) ([]APIKey, error) {
+	rows, err := s.r.QueryContext(ctx, s.q(`SELECT k.id, k.name, k.prefix, k.role, COALESCE(u.email, ''), k.created_at, k.last_used_at
+		FROM api_keys k LEFT JOIN users u ON u.id = k.created_by
+		WHERE COALESCE(k.team_id, 0)=? ORDER BY k.created_at DESC`), teamID)
 	if err != nil {
 		return nil, err
 	}
@@ -750,14 +773,16 @@ func (s *Store) ListAPIKeys(ctx context.Context) ([]APIKey, error) {
 		if err := rows.Scan(&k.ID, &k.Name, &k.Prefix, &k.Role, &k.CreatedByEmail, &created, &used); err != nil {
 			return nil, err
 		}
+		k.TeamID = teamID
 		k.CreatedAt, k.LastUsedAt = fromMS(created), optMS(used)
 		out = append(out, k)
 	}
 	return out, rows.Err()
 }
 
-func (s *Store) DeleteAPIKey(ctx context.Context, id int64) error {
-	res, err := s.w.ExecContext(ctx, s.q(`DELETE FROM api_keys WHERE id=?`), id)
+// DeleteAPIKey revokes a key; it must belong to teamID (0 = self-hosted).
+func (s *Store) DeleteAPIKey(ctx context.Context, teamID, id int64) error {
+	res, err := s.w.ExecContext(ctx, s.q(`DELETE FROM api_keys WHERE id=? AND COALESCE(team_id, 0)=?`), id, teamID)
 	if err != nil {
 		return err
 	}
@@ -773,9 +798,9 @@ func (s *Store) LookupAPIKey(ctx context.Context, key string, now time.Time) (AP
 	var k APIKey
 	var created int64
 	var used sql.NullInt64
-	err := s.r.QueryRowContext(ctx, s.q(`SELECT id, name, prefix, role, created_at, last_used_at
+	err := s.r.QueryRowContext(ctx, s.q(`SELECT id, COALESCE(team_id, 0), name, prefix, role, created_at, last_used_at
 		FROM api_keys WHERE key_hash=?`), digest(key)).
-		Scan(&k.ID, &k.Name, &k.Prefix, &k.Role, &created, &used)
+		Scan(&k.ID, &k.TeamID, &k.Name, &k.Prefix, &k.Role, &created, &used)
 	if errors.Is(err, sql.ErrNoRows) {
 		return APIKey{}, false, nil
 	}

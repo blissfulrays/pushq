@@ -43,7 +43,7 @@ func TestLoadSmoke(t *testing.T) {
 			t.Fatal(perr)
 		}
 		if _, perr := pg.DB().ExecContext(context.Background(),
-			`DROP TABLE IF EXISTS task_attempts, tasks, queues, schema_migrations CASCADE`); perr != nil {
+			`DROP TABLE IF EXISTS team_invites, team_members, teams, api_keys, invites, sessions, users, task_attempts, tasks, queues, schema_migrations CASCADE`); perr != nil {
 			t.Fatal(perr)
 		}
 		st = pg

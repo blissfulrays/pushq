@@ -154,6 +154,18 @@ curl 'localhost:8080/v1/queues?name_prefix=user/'   # everything in the folder
 The binary embeds a dashboard at `/ui/` — queues browsable by folder with live
 stats, pause/resume/purge, task browsing with attempt history, force-run.
 
+### Two ways to run it
+
+| | Self-hosted (default) | SaaS mode |
+|---|---|---|
+| Turned on by | nothing — no WorkOS settings | `WORKOS_CLIENT_ID` + `WORKOS_API_KEY` |
+| Sign-in | local accounts; first launch creates the admin | WorkOS AuthKit only (it handles sign-up, passwords, MFA) |
+| Teams | one: you, plus anyone you invite | anyone can sign up and create teams; a person can be in several and switch |
+| Data | shared by everyone on the server | **isolated per team**: queues, tasks, API keys, stats |
+| Invites | copy-a-link | emailed by WorkOS |
+
+See [SaaS mode](docs/deploy.md#saas-mode-workos) for the WorkOS dashboard setup.
+
 ### Sign-in and team
 
 - **First launch:** opening `/ui/` on a new server asks you to create the

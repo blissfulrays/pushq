@@ -18,19 +18,25 @@ import (
 	"github.com/blissfulrays/pushq/internal/auth"
 	"github.com/blissfulrays/pushq/internal/config"
 	"github.com/blissfulrays/pushq/internal/store"
+	"github.com/blissfulrays/pushq/internal/workos"
 	"github.com/blissfulrays/pushq/web"
 )
 
 type Server struct {
-	Store          store.Store
-	Auth           *auth.Auth
-	Accounts       *accounts.Store // nil disables dashboard accounts
-	Log            *slog.Logger
-	Limits         config.Limits
-	MetricsPublic  bool
-	MetricsHandler http.Handler
-	Now            func() time.Time
-	Role           func() string // "leader" | "follower" for readyz
+	Store    store.Store
+	Auth     *auth.Auth
+	Accounts *accounts.Store // nil disables dashboard accounts
+
+	// WorkOS switches on SaaS mode together with Auth.EnableSaaS: WorkOS
+	// sign-in only, teams as WorkOS Organizations, team-isolated data.
+	WorkOS            *workos.Client
+	WorkOSRedirectURI string // "" = derive from the request
+	Log               *slog.Logger
+	Limits            config.Limits
+	MetricsPublic     bool
+	MetricsHandler    http.Handler
+	Now               func() time.Time
+	Role              func() string // "leader" | "follower" for readyz
 
 	loginLimiter limiterMap
 }
@@ -45,7 +51,7 @@ func (s *Server) Router() http.Handler {
 		if s.MetricsPublic {
 			r.Handle("/metrics", s.MetricsHandler)
 		} else {
-			r.With(s.authenticate, s.require(auth.PermList)).Handle("/metrics", s.MetricsHandler)
+			r.With(s.authenticate, s.require(auth.PermList), s.operatorOnlyInSaaS).Handle("/metrics", s.MetricsHandler)
 		}
 	}
 
@@ -58,6 +64,8 @@ func (s *Server) Router() http.Handler {
 		r.Post("/auth/login", s.handleLogin)
 		r.Post("/auth/logout", s.handleLogout)
 		r.Get("/auth/invites/{token}", s.handleInviteGet)
+		r.Get("/auth/workos/login", s.handleWorkOSLogin)
+		r.Get("/auth/workos/callback", s.handleWorkOSCallback)
 		r.Post("/auth/invites/{token}:accept", s.handleInviteAccept)
 
 		read := r.With(s.require(auth.PermRead))
@@ -90,7 +98,13 @@ func (s *Server) Router() http.Handler {
 			r.Use(s.requireUser)
 			r.Patch("/me", s.handleMePatch)
 			r.Post("/me/password", s.handleMePassword)
+
+			// SaaS mode: the user's teams (WorkOS Organizations).
+			r.Get("/teams", s.handleTeamsList)
+			r.Post("/teams", s.handleTeamCreate)
+			r.Post("/teams/{id}:switch", s.handleTeamSwitch)
 		})
+		r.With(s.require(auth.PermManage), s.requireAccounts).Patch("/teams/current", s.handleTeamRename)
 
 		// Team and API keys (admins).
 		r.Group(func(r chi.Router) {
@@ -239,6 +253,20 @@ func (s *Server) require(perm auth.Perm) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// operatorOnlyInSaaS keeps instance-wide endpoints (/metrics names every
+// team's queues) to the operator's config-file keys in SaaS mode.
+func (s *Server) operatorOnlyInSaaS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.Auth.SaaS() {
+			if p := principal(r); p.Kind != auth.KindKey || p.Team != nil {
+				writeProblem(w, r, http.StatusForbidden, CodePermissionDenied, "only the operator's API keys can read instance metrics")
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // requireUser rejects callers that aren't a signed-in dashboard user.

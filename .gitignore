@@ -16,3 +16,8 @@ coverage.out
 
 # transient artifact from the CI type-visibility check
 sdks/python/consumer_check.py
+
+# Local secrets (WorkOS credentials, API keys). .env.example is committed.
+.env
+.env.*
+!.env.example

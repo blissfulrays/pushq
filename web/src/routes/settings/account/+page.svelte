@@ -77,6 +77,17 @@
 			</Card.Content>
 		</Card.Root>
 
+		{#if auth.saas}
+			<Card.Root>
+				<Card.Header>
+					<Card.Title>Sign-in</Card.Title>
+					<Card.Description>
+						Your password, passkeys and two-factor settings are managed by our sign-in provider. Use
+						“Forgot password” on the sign-in page to change your password.
+					</Card.Description>
+				</Card.Header>
+			</Card.Root>
+		{:else}
 		<Card.Root>
 			<Card.Header>
 				<Card.Title>Password</Card.Title>
@@ -101,5 +112,6 @@
 				</form>
 			</Card.Content>
 		</Card.Root>
+		{/if}
 	</div>
 {/if}

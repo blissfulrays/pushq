@@ -6,12 +6,18 @@
 //   - a dashboard user, via the session cookie set at login;
 //   - anyone, while the server is "open": dev mode, or no config keys and no
 //     dashboard accounts yet. Creating the first account closes it.
+//
+// In SaaS mode (WorkOS configured) the server is never open. Dashboard users
+// and dashboard-created API keys act inside one team (Principal.Team), with
+// the role they hold there; config-file keys are the operator's and are not
+// team-scoped.
 package auth
 
 import (
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -79,6 +85,10 @@ type Principal struct {
 	KeyName string
 	// SessionToken is set when authenticated by the session cookie.
 	SessionToken string
+	// Team is the team this caller acts in (SaaS mode). Nil for self-hosted
+	// callers and for the operator's config-file keys; a SaaS user with no
+	// team yet has Team == nil and no queue permissions.
+	Team *accounts.Team
 }
 
 func (p Principal) Can(x Perm) bool { return p.Perms&x == x }
@@ -87,8 +97,15 @@ type Auth struct {
 	keys     []keyEntry
 	accounts *accounts.Store
 	dev      bool
+	saas     bool
 	now      func() time.Time
 }
+
+// EnableSaaS switches to multi-team mode (WorkOS sign-in, team-scoped access).
+func (a *Auth) EnableSaaS() { a.saas = true }
+
+// SaaS reports whether multi-team mode is on.
+func (a *Auth) SaaS() bool { return a.saas }
 
 type keyEntry struct {
 	hash [32]byte
@@ -126,6 +143,9 @@ func (a *Auth) HasUsers(ctx context.Context) (bool, error) {
 func (a *Auth) IsOpen(ctx context.Context) (bool, error) {
 	if a.dev {
 		return true, nil
+	}
+	if a.saas {
+		return false, nil
 	}
 	if a.HasConfigKeys() {
 		return false, nil
@@ -179,21 +199,53 @@ func (a *Auth) Authenticate(r *http.Request) (p Principal, renewed *time.Time, e
 				return Principal{}, nil, err
 			}
 			if ok {
-				return Principal{Kind: KindKey, Perms: PermsForKey(k.Role), Role: string(k.Role), KeyName: k.Name}, nil, nil
+				p := Principal{Kind: KindKey, Perms: PermsForKey(k.Role), Role: string(k.Role), KeyName: k.Name}
+				if k.TeamID > 0 {
+					t, err := a.accounts.GetTeam(ctx, k.TeamID)
+					if err != nil {
+						return Principal{}, nil, err
+					}
+					p.Team = &t
+				} else if a.saas {
+					// An unscoped dashboard key can't exist in SaaS mode; refuse rather than grant operator access.
+					return Principal{}, nil, nil
+				}
+				return p, nil, nil
 			}
 		}
 		return Principal{}, nil, nil
 	}
 
 	if c, err := r.Cookie(SessionCookie); err == nil && c.Value != "" && a.accounts != nil {
-		u, renewed, err := a.accounts.SessionUser(ctx, c.Value, a.now())
+		u, teamID, renewed, err := a.accounts.Session(ctx, c.Value, a.now())
 		if err == accounts.ErrBadCredentials {
 			return Principal{}, nil, nil
 		}
 		if err != nil {
 			return Principal{}, nil, err
 		}
-		return Principal{Kind: KindUser, Perms: PermsForUser(u.Role), Role: string(u.Role), User: &u, SessionToken: c.Value}, renewed, nil
+		p := Principal{Kind: KindUser, Perms: PermsForUser(u.Role), Role: string(u.Role), User: &u, SessionToken: c.Value}
+		if a.saas {
+			// Permissions come from the role in the current team; no team = none.
+			p.Perms, p.Role = 0, ""
+			if teamID > 0 {
+				role, err := a.accounts.MemberRole(ctx, teamID, u.ID)
+				switch {
+				case err == nil:
+					t, err := a.accounts.GetTeam(ctx, teamID)
+					if err != nil {
+						return Principal{}, nil, err
+					}
+					p.Team, p.Role, p.Perms = &t, string(role), PermsForUser(role)
+					p.User.Role = role
+				case errors.Is(err, accounts.ErrNotMember):
+					// Removed from the team since this session picked it.
+				default:
+					return Principal{}, nil, err
+				}
+			}
+		}
+		return p, renewed, nil
 	}
 	return Principal{}, nil, nil
 }
