@@ -1,36 +1,104 @@
 name: release
 
-# Tagging vX.Y.Z publishes everything at that version: binaries, the Docker
-# image, and all four SDKs. Each SDK job no-ops until its credentials exist,
-# so you can enable registries one at a time. See docs/publishing.md.
+# Publishes everything at one version: binaries, the Docker image, and all
+# four SDKs. Each SDK job no-ops until its credentials exist, so you can enable
+# registries one at a time. See docs/publishing.md.
+#
+# Three ways in:
+#   - Merge to main (automatic): once CI passes on main, the next version is
+#     tagged and released — the next prerelease after a beta
+#     (0.1.0-beta.4 -> 0.1.0-beta.5), otherwise the next patch. Skipped when
+#     nothing that ships changed, or the commit message says [skip release].
+#   - Run this workflow by hand with an explicit version (e.g. to cut 0.2.0).
+#   - Push a vX.Y.Z tag yourself.
 on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    branches: [main]
   push:
     tags: ["v*"]
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to publish (without the leading v), e.g. 0.1.0"
+        description: "Version to publish (without the leading v), e.g. 0.2.0"
         required: true
 
 permissions:
   contents: write
 
+# One release at a time, in order, so two quick merges can't claim the same
+# version.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   version:
     runs-on: ubuntu-latest
+    # Automatic releases only follow a successful CI run for a push to main
+    # (never a pull request, never a failed run).
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
     outputs:
+      release: ${{ steps.v.outputs.release }}
       version: ${{ steps.v.outputs.version }}
       prerelease: ${{ steps.v.outputs.prerelease }}
       npm_tag: ${{ steps.v.outputs.npm_tag }}
+      # The exact commit to build. Every job checks this out: for automatic
+      # releases it is the commit CI tested, not whatever main points at now.
+      sha: ${{ steps.v.outputs.sha }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          fetch-depth: 0
       - id: v
-        # Tag v0.1.0 -> 0.1.0; v0.1.0-beta.1 -> 0.1.0-beta.1 (a prerelease).
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          HEAD_MSG: ${{ github.event.workflow_run.head_commit.message }}
         run: |
-          if [ -n "${{ inputs.version }}" ]; then
-            V="${{ inputs.version }}"
-          else
-            V="${GITHUB_REF_NAME#v}"
-          fi
+          set -euo pipefail
+          SHA=$(git rev-parse HEAD)
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          skip() {
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=No release::$1"
+            exit 0
+          }
+
+          case "$EVENT" in
+            workflow_dispatch) V="${INPUT_VERSION#v}" ;;
+            push)              V="${GITHUB_REF_NAME#v}" ;;   # tag v0.1.0 -> 0.1.0
+            workflow_run)
+              if printf '%s' "$HEAD_MSG" | grep -qiE '\[(skip release|release skip|no release)\]'; then
+                skip "the commit message asked to skip the release"
+              fi
+              if git tag --points-at HEAD | grep -q '^v'; then
+                skip "this commit is already released as $(git tag --points-at HEAD | grep '^v' | head -1)"
+              fi
+              # Newest release tag; versionsort.suffix makes 0.1.0-beta.4 sort before 0.1.0.
+              LAST=$(git -c versionsort.suffix=- tag -l 'v[0-9]*' --sort=-v:refname | head -1)
+              if [ -z "$LAST" ]; then
+                V="0.1.0-beta.1"
+              else
+                # Docs, CI and test-only merges don't publish anything.
+                if [ -z "$(git diff --name-only "$LAST" HEAD -- cmd internal web sdks api go.mod go.sum Dockerfile .goreleaser.yaml)" ]; then
+                  skip "nothing that ships has changed since $LAST"
+                fi
+                if [[ "$LAST" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)-([0-9A-Za-z]+)\.([0-9]+)$ ]]; then
+                  V="${BASH_REMATCH[1]}-${BASH_REMATCH[2]}.$((BASH_REMATCH[3] + 1))"
+                elif [[ "$LAST" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+                  V="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.$((BASH_REMATCH[3] + 1))"
+                else
+                  echo "::error title=Unknown version format::Can't work out the version after $LAST; run this workflow by hand with an explicit version."
+                  exit 1
+                fi
+              fi
+              ;;
+          esac
           echo "version=$V" >> "$GITHUB_OUTPUT"
 
           # Anything with a hyphen is a semver prerelease (beta, rc, alpha…).
@@ -49,11 +117,31 @@ jobs:
               ;;
           esac
 
+          # Make sure tag vX.Y.Z exists at this commit (created here for
+          # automatic and manual runs). A tag pushed with GITHUB_TOKEN does not
+          # trigger workflows, so this doesn't start a second release.
+          TAG="v$V"
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            if [ "$(git rev-list -n1 "$TAG")" != "$SHA" ]; then
+              echo "::error title=Tag exists::$TAG already points at another commit."
+              exit 1
+            fi
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git tag -a "$TAG" -m "Release $TAG"
+            git push origin "$TAG"
+          fi
+          echo "release=true" >> "$GITHUB_OUTPUT"
+          echo "::notice title=Releasing $TAG::from $SHA"
+
   goreleaser:
+    needs: version
+    if: needs.version.outputs.release == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
+        with: { fetch-depth: 0, ref: "${{ needs.version.outputs.sha }}" }
       - uses: actions/setup-node@v4
         with: { node-version: "22" }
       - uses: actions/setup-go@v5
@@ -65,15 +153,18 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GORELEASER_CURRENT_TAG: v${{ needs.version.outputs.version }}
 
   docker:
     needs: version
+    if: needs.version.outputs.release == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@v4
+        with: { ref: "${{ needs.version.outputs.sha }}" }
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
@@ -111,6 +202,7 @@ jobs:
 
   npm:
     needs: version
+    if: needs.version.outputs.release == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -120,6 +212,7 @@ jobs:
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
     steps:
       - uses: actions/checkout@v4
+        with: { ref: "${{ needs.version.outputs.sha }}" }
       - uses: actions/setup-node@v4
         with: { node-version: "22", registry-url: "https://registry.npmjs.org" }
       - name: Set version and build
@@ -143,6 +236,7 @@ jobs:
 
   pypi:
     needs: version
+    if: needs.version.outputs.release == 'true'
     # This job always runs and always builds + validates the distributions.
     # Only the upload is gated, so the log says plainly whether it published
     # and why not — a skipped job would just show empty output.
@@ -153,6 +247,7 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v4
+        with: { ref: "${{ needs.version.outputs.sha }}" }
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
       - name: Set version and build
@@ -183,6 +278,7 @@ jobs:
 
   maven:
     needs: version
+    if: needs.version.outputs.release == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -190,6 +286,7 @@ jobs:
       MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
     steps:
       - uses: actions/checkout@v4
+        with: { ref: "${{ needs.version.outputs.sha }}" }
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -257,12 +354,13 @@ jobs:
   # fetches from the tag itself.
   go-sdk-tag:
     needs: version
+    if: needs.version.outputs.release == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
+        with: { fetch-depth: 0, ref: "${{ needs.version.outputs.sha }}" }
       - name: Tag sdks/go
         run: |
           TAG="sdks/go/v${{ needs.version.outputs.version }}"

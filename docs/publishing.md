@@ -1,7 +1,30 @@
 # Publishing the SDKs
 
-One tag publishes everything. Pushing `v0.1.0` runs `.github/workflows/release.yml`,
-which stamps that version into every SDK and pushes to each registry:
+Releases are automatic. When a change lands on `main` and CI passes there,
+`.github/workflows/release.yml` tags the next version and publishes it
+everywhere: binaries, the Docker image, and all four SDKs.
+
+## How versions are picked
+
+| Latest release | Next automatic release |
+|---|---|
+| `v0.1.0-beta.4` (prerelease) | `v0.1.0-beta.5` |
+| `v0.1.0` (stable) | `v0.1.1` |
+
+- **Nothing ships, nothing publishes.** A release only happens when something
+  under `cmd/`, `internal/`, `web/`, `sdks/`, `api/`, `go.mod`, `go.sum`,
+  `Dockerfile` or `.goreleaser.yaml` changed since the last release. Docs and
+  CI-only merges are skipped.
+- **Skip one on purpose:** put `[skip release]` in the merge commit message.
+- **Cut a specific version** (a stable `0.1.0`, a minor `0.2.0`, a new
+  `0.2.0-rc.1`, …): Actions → *release* → *Run workflow* with that version.
+  The workflow creates the tag. Later automatic releases continue from it.
+- **Or push a tag yourself:** `git tag v0.2.0 && git push origin v0.2.0`.
+
+Releases run one at a time, so two quick merges get consecutive versions. A
+failed CI run on `main` never releases.
+
+## Where each part goes
 
 | Target | Registry | Credentials needed | Job no-ops without them |
 |---|---|---|---|
