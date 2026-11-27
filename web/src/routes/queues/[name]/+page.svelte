@@ -15,6 +15,9 @@
 	import StatCard from '$lib/components/StatCard.svelte';
 	import StateBadge from '$lib/components/StateBadge.svelte';
 	import TimeStamp from '$lib/components/TimeStamp.svelte';
+	import Pager from '$lib/components/Pager.svelte';
+	import { storedPageSize } from '$lib/pagination';
+	import { untrack } from 'svelte';
 
 	const name = $derived(page.params.name ?? '');
 
@@ -23,6 +26,11 @@
 	let tasks = $state<Task[] | null>(null);
 	let nextToken = $state('');
 	let pageToken = $state('');
+	// Tasks page by server cursor. pageTokens[i] is the cursor for page i+1,
+	// so Previous can step back.
+	let pageNum = $state(1);
+	let pageSize = $state(storedPageSize('tasks', 50));
+	let pageTokens: string[] = [''];
 	let stateFilter = $state('');
 	let loadError = $state<string | null>(null);
 	let actionError = $state<string | null>(null);
@@ -48,11 +56,11 @@
 		}
 	}
 
-	async function loadTasks(q: string, filter: string, token: string) {
+	async function loadTasks(q: string, filter: string, token: string, size: number) {
 		try {
 			const res = await api.listTasks(q, {
 				state: filter || undefined,
-				pageSize: 50,
+				pageSize: size,
 				pageToken: token || undefined
 			});
 			tasks = res.tasks ?? [];
@@ -78,17 +86,47 @@
 		const q = name;
 		const filter = stateFilter;
 		const token = pageToken;
+		const size = pageSize;
 		if (!q) return;
 		tasks = null;
-		loadTasks(q, filter, token);
-		const timer = setInterval(() => loadTasks(q, filter, token), 5000);
+		nextToken = ''; // no stale "Next" while the new page loads
+		loadTasks(q, filter, token, size);
+		const timer = setInterval(() => loadTasks(q, filter, token, size), 5000);
 		return () => clearInterval(timer);
 	});
 
 	function setFilter(value: string) {
 		stateFilter = value;
+		resetPaging();
+	}
+
+	function resetPaging() {
+		pageTokens = [''];
+		pageNum = 1;
 		pageToken = '';
 	}
+
+	// Moving forward records the cursor the server handed back; moving back
+	// reuses a recorded one.
+	$effect.pre(() => {
+		const p = pageNum;
+		untrack(() => {
+			if (p > pageTokens.length) pageTokens = [...pageTokens, nextToken];
+			pageToken = pageTokens[p - 1] ?? '';
+		});
+	});
+
+	// A new page size or a different queue starts again from the first page.
+	let lastKey = '';
+	$effect.pre(() => {
+		const key = `${name}|${pageSize}`;
+		untrack(() => {
+			if (key !== lastKey) {
+				if (lastKey) resetPaging();
+				lastKey = key;
+			}
+		});
+	});
 
 	async function togglePause() {
 		if (!queue) return;
@@ -111,7 +149,7 @@
 			queue = await api.purgeQueue(name);
 			purgeOpen = false;
 			loadMeta(name);
-			loadTasks(name, stateFilter, pageToken);
+			loadTasks(name, stateFilter, pageToken, pageSize);
 		} catch (e) {
 			actionError = errorMessage(e);
 		} finally {
@@ -349,18 +387,7 @@
 			</Table.Root>
 		</div>
 
-		<div class="flex items-center justify-between">
-			<div>
-				{#if pageToken}
-					<Button variant="ghost" size="sm" onclick={() => (pageToken = '')}>First page</Button>
-				{/if}
-			</div>
-			{#if nextToken}
-				<Button variant="outline" size="sm" onclick={() => (pageToken = nextToken)}>
-					Next page
-				</Button>
-			{/if}
-		</div>
+		<Pager bind:page={pageNum} bind:pageSize hasNext={!!nextToken} storageKey="tasks" noun="tasks" />
 	</div>
 </div>
 

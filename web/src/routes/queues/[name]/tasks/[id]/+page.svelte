@@ -2,6 +2,8 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import FolderCrumbs from '$lib/components/FolderCrumbs.svelte';
+	import Pager from '$lib/components/Pager.svelte';
+	import { paginate, storedPageSize } from '$lib/pagination';
 	import { folderOf, leafOf, queueHref } from '$lib/folders';
 	import { api, errorMessage, type Attempt, type Task } from '$lib/api';
 	import { auth } from '$lib/auth.svelte';
@@ -19,6 +21,12 @@
 
 	let task = $state<Task | null>(null);
 	let attempts = $state<Attempt[] | null>(null);
+	let attemptPage = $state(1);
+	let attemptPageSize = $state(storedPageSize('attempts', 25));
+	const pagedAttempts = $derived(paginate(attempts ?? [], attemptPage, attemptPageSize));
+	$effect(() => {
+		if (attemptPage !== pagedAttempts.page) attemptPage = pagedAttempts.page;
+	});
 	let loadError = $state<string | null>(null);
 	let actionError = $state<string | null>(null);
 	let notice = $state<string | null>(null);
@@ -284,7 +292,7 @@
 								</Table.Cell>
 							</Table.Row>
 						{:else}
-							{#each attempts as a (a.number)}
+							{#each pagedAttempts.rows as a (a.number)}
 								<Table.Row>
 									<Table.Cell class="pl-6 tabular-nums">{num(a.number)}</Table.Cell>
 									<Table.Cell class="text-muted-foreground">
@@ -331,6 +339,19 @@
 						{/if}
 					</Table.Body>
 				</Table.Root>
+				{#if attempts && attempts.length > 0}
+					<div class="border-t px-6 py-3">
+						<Pager
+							bind:page={attemptPage}
+							bind:pageSize={attemptPageSize}
+							total={pagedAttempts.total}
+							from={pagedAttempts.from}
+							to={pagedAttempts.to}
+							storageKey="attempts"
+							noun="attempts"
+						/>
+					</div>
+				{/if}
 			</Card.Content>
 		</Card.Root>
 	{:else if !loadError}

@@ -12,6 +12,8 @@
 	import FolderCrumbs from '$lib/components/FolderCrumbs.svelte';
 	import StateBadge from '$lib/components/StateBadge.svelte';
 	import TimeStamp from '$lib/components/TimeStamp.svelte';
+	import Pager from '$lib/components/Pager.svelte';
+	import { paginate, storedPageSize } from '$lib/pagination';
 
 	/** Upper bound on queues fetched for one folder view (pages of 1000). */
 	const MAX_QUEUES = 5000;
@@ -22,6 +24,8 @@
 	);
 
 	let filter = $state('');
+	let pageNum = $state(1);
+	let pageSize = $state(storedPageSize('queues', 50));
 	let queues = $state<Queue[] | null>(null);
 	let truncated = $state(false);
 	let error = $state<string | null>(null);
@@ -68,6 +72,7 @@
 			if (lastFolder !== undefined) {
 				filter = '';
 				queues = null;
+				pageNum = 1;
 			}
 			lastFolder = folder;
 		}
@@ -104,6 +109,22 @@
 			}));
 		}
 		return groupByFolder(queues, folder);
+	});
+
+	const paged = $derived(paginate(rows, pageNum, pageSize));
+
+	// Back to the first page whenever the search changes.
+	let lastFilter = '';
+	$effect.pre(() => {
+		const f = filter.trim();
+		if (f !== lastFilter) {
+			lastFilter = f;
+			pageNum = 1;
+		}
+	});
+	// Keep the page in range when the list shrinks (e.g. queues deleted).
+	$effect(() => {
+		if (pageNum !== paged.page) pageNum = paged.page;
 	});
 
 	function open(row: Row) {
@@ -195,7 +216,7 @@
 							</Table.Cell>
 						</Table.Row>
 					{:else}
-						{#each rows as row (row.kind === 'folder' ? `f:${row.path}` : `q:${row.queue.name}`)}
+						{#each paged.rows as row (row.kind === 'folder' ? `f:${row.path}` : `q:${row.queue.name}`)}
 							<Table.Row
 								class="cursor-pointer"
 								role="link"
@@ -242,6 +263,17 @@
 				</Table.Body>
 			</Table.Root>
 		</div>
+		{#if queues !== null && rows.length > 0}
+			<Pager
+				bind:page={pageNum}
+				bind:pageSize
+				total={paged.total}
+				from={paged.from}
+				to={paged.to}
+				storageKey="queues"
+				noun="queues"
+			/>
+		{/if}
 		{#if truncated}
 			<p class="text-xs text-muted-foreground">
 				Showing the first {MAX_QUEUES} queues{folder ? ` in ${folder}/` : ''} — open a folder or filter
