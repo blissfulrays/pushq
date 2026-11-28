@@ -128,6 +128,19 @@ instant receiver, 1,000 dynamic queues × 50,000 tasks):
 Treat these as upper-bound smoke numbers, not SLOs — real throughput is
 usually bounded by your receivers.
 
+To measure a running server (local or hosted) from any machine, use the
+stress tool. It ramps load in steps, stops early on errors or slow p99s, and
+sends deliveries to the server's own `/healthz`, so it needs no receiver:
+
+```bash
+PUSHQ_API_KEY=pq_... go run ./test/stress                       # baseline, enqueue, batch, dispatch, fanout
+go run ./test/stress -base http://localhost:8080 -phase enqueue  # one phase
+go run ./test/stress -phase linktodm -queues 1000 -prefill 60000 # many rate-limited queues + backlog
+```
+
+Its queues are named `loadtest/…` and are purged and paused afterwards (also
+deleted when the key is an admin key).
+
 ## Monitoring
 
 - `GET /metrics` — Prometheus: dispatch counts by code class, error kinds,
