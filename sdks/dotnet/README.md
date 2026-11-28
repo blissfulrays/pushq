@@ -17,7 +17,7 @@ rate limits, concurrency caps, and Cloud Tasks-compatible retries.
 ## Install
 
 ```bash
-dotnet add package Pushq --prerelease
+dotnet add package Pushq
 ```
 
 ## Quickstart

@@ -1,6 +1,6 @@
 # pushq Java SDK
 
-Official Java client for [pushq](https://github.com/pushq/pushq), a self-hosted
+Official Java client for [pushq](https://github.com/blissfulrays/pushq), a self-hosted
 HTTP push task queue (an open-source alternative to GCP Cloud Tasks). Tasks are
 delivered to your endpoints as HTTP requests with per-queue rate limits,
 concurrency caps, and Cloud Tasks-compatible retry semantics.
@@ -18,7 +18,7 @@ concurrency caps, and Cloud Tasks-compatible retry semantics.
 <dependency>
   <groupId>io.github.blissfulrays</groupId>
   <artifactId>pushq</artifactId>
-  <version>0.1.0-SNAPSHOT</version>
+  <version>1.0.0-SNAPSHOT</version>
 </dependency>
 ```
 
@@ -193,5 +193,5 @@ client.deleteTask("emails", "welcome-user-9182");
 
 ```sh
 mvn test     # unit tests (no network; stub HTTP server)
-mvn package  # builds target/pushq-0.1.0-SNAPSHOT.jar
+mvn package  # builds target/pushq-1.0.0-SNAPSHOT.jar
 ```
