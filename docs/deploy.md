@@ -88,8 +88,7 @@ one currently runs the dispatcher (`"role": "leader"`).
 2. App settings: exposed port `8080`, your domain, health check **off** (the
    image is distroless, so Coolify's in-container curl/wget check can't run).
 3. Environment: `PUSHQ_DB=postgres://USER:PASS@<database-uuid>:5432/DB?sslmode=disable`
-   (the database's internal hostname is its Coolify UUID), plus the
-   [SaaS mode](#saas-mode-workos) variables if you want them.
+   (the database's internal hostname is its Coolify UUID).
 
 **Deploy every release automatically:** run the app on `:edge`, then add two
 repository secrets — `COOLIFY_WEBHOOK` (the app's Deploy Webhook URL, under
@@ -142,50 +141,3 @@ usually bounded by your receivers.
 SQLite: back up the `.db` file (WAL mode — use `sqlite3 .backup` or stop the
 service). Postgres: normal `pg_dump`. All state lives in three tables
 (`queues`, `tasks`, `task_attempts`).
-
-## SaaS mode (WorkOS)
-
-Set `WORKOS_CLIENT_ID` and `WORKOS_API_KEY` (environment, or a `.env` file
-next to where `pushq serve` runs; see `.env.example`) and pushq becomes
-multi-tenant:
-
-- **Sign-in uses pushq's own page, backed by WorkOS** (no WorkOS-hosted
-  screens). People sign in with a 6-digit code emailed to them, or with
-  GitHub; a new email or GitHub account gets a pushq account, so this is
-  sign-up too. No setup screen and no passwords.
-- **Teams are WorkOS Organizations.** A new user creates a team; admins invite
-  people from *Settings → Team* and WorkOS emails the invitation. A person can
-  belong to several teams and switch between them in the account menu.
-- **Each team's data is isolated.** Queues, tasks, attempts, stats and API keys
-  are scoped to the team; two teams can both have a queue called `emails`.
-  Internally a team's queues are stored as `<namespace>:<name>`, which no
-  client-supplied name can reach, and receivers only ever see the short name.
-- **Roles live in pushq** (admin / member / viewer, per team). In WorkOS a
-  pushq admin is an organization `admin` and members and viewers are `member`.
-- **Config-file `api_keys` are operator keys**: not tied to a team, they see
-  every team's queues and can read `/metrics` (which team users can't, since it
-  names every team's queues). Keep them for your own tooling.
-
-### WorkOS dashboard checklist
-
-1. **Authentication**: enable **Magic Auth** (email codes) and **GitHub
-   OAuth**, and allow sign-ups so new customers can create accounts.
-   *Email verification*: with it on, WorkOS pauses a GitHub sign-in until the
-   person enters a code it emails (pushq's sign-in page asks for it). Turn it
-   off to let GitHub sign-ins straight in; pushq then trusts the email GitHub
-   provides. Email-code sign-ins prove the address either way.
-2. **Redirects → Sign-in callback** (used by GitHub only): add
-   `https://<your-pushq-host>/v1/auth/workos/callback`
-   (for local testing in staging: `http://localhost:8080/v1/auth/workos/callback`).
-   If pushq sits behind a proxy that changes the host or scheme, set
-   `WORKOS_REDIRECT_URI` to the exact URL instead.
-3. **Roles**: keep the default `admin` and `member` roles (pushq uses those
-   slugs; if `admin` is missing it falls back to the default role).
-4. Use the **staging** environment while testing; it's free.
-
-Pushq re-syncs a person's teams from WorkOS every time they sign in, and a
-team's members whenever its Team page is opened, so changes made directly in
-the WorkOS dashboard are picked up.
-
-Switching an existing self-hosted server to SaaS mode leaves its existing
-queues untouched but outside every team (only operator keys see them).
