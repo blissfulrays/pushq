@@ -12,20 +12,27 @@
 	} = $props();
 
 	const styles: Record<string, string> = {
-		'queue:running': 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400',
-		'queue:paused': 'bg-amber-500/15 text-amber-700 dark:text-amber-400',
-		'queue:disabled': 'bg-red-500/15 text-red-700 dark:text-red-400',
-		'task:pending': 'bg-sky-500/15 text-sky-700 dark:text-sky-400',
-		'task:running': 'bg-blue-500/15 text-blue-700 dark:text-blue-400',
-		'task:succeeded': 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400',
-		'task:failed': 'bg-red-500/15 text-red-700 dark:text-red-400'
+		'queue:running': 'border-success/25 bg-success/10 text-success',
+		'queue:paused': 'border-warning/25 bg-warning/10 text-warning',
+		'queue:disabled': 'border-destructive/25 bg-destructive/10 text-destructive',
+		'task:pending': 'border-edge bg-muted text-muted-foreground',
+		'task:running': 'border-brand/25 bg-brand/10 text-brand',
+		'task:succeeded': 'border-success/25 bg-success/10 text-success',
+		'task:failed': 'border-destructive/25 bg-destructive/10 text-destructive'
 	};
 
-	const cls = $derived(styles[`${kind}:${state ?? ''}`] ?? 'bg-muted text-muted-foreground');
+	const cls = $derived(styles[`${kind}:${state ?? ''}`] ?? 'border-edge bg-muted text-muted-foreground');
+	// A live dot for states that are moving.
+	const live = $derived(state === 'running');
 </script>
 
 <span
-	class={cn('inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium', cls, className)}
+	class={cn(
+		'inline-flex items-center gap-1.5 rounded-full border px-2 py-px font-mono text-[11px] font-medium',
+		cls,
+		className
+	)}
 >
+	<i class={cn('size-1.5 rounded-full bg-current', live && 'animate-pulse')}></i>
 	{state ?? 'unknown'}
 </span>

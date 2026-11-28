@@ -4,7 +4,10 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import * as Card from '$lib/components/ui/card';
-	import * as Table from '$lib/components/ui/table';
+	import DataTable from '$lib/components/data-table/DataTable.svelte';
+	import type { Column } from '$lib/components/data-table/features';
+	import PanelHeader from '$lib/components/settings/PanelHeader.svelte';
+	import { renderSnippet } from '@tanstack/svelte-table';
 	import Dialog from '$lib/components/ui/dialog/dialog.svelte';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 	import CopyField from '$lib/components/CopyField.svelte';
@@ -157,6 +160,40 @@
 		}
 	}
 
+	const userColumns: Column<User>[] = [
+		{ id: 'member', header: 'Member', cell: ({ row }) => renderSnippet(memberCell, row.original) },
+		{ id: 'role', header: 'Role', cell: ({ row }) => renderSnippet(roleCell, row.original) },
+		{
+			id: 'last',
+			header: 'Last sign-in',
+			class: 'hidden text-muted-foreground sm:table-cell',
+			cell: ({ row }) => renderSnippet(lastSignInCell, row.original)
+		},
+		{
+			id: 'actions',
+			header: 'Actions',
+			class: 'text-right',
+			cell: ({ row }) => renderSnippet(memberActionsCell, row.original)
+		}
+	];
+
+	const inviteColumns: Column<Invite>[] = [
+		{ accessorKey: 'email', header: 'Email', class: 'font-medium' },
+		{ accessorKey: 'role', header: 'Role', class: 'capitalize text-muted-foreground' },
+		{
+			id: 'expires',
+			header: 'Expires',
+			class: 'hidden text-muted-foreground sm:table-cell',
+			cell: ({ row }) => renderSnippet(expiresCell, row.original)
+		},
+		{
+			id: 'actions',
+			header: '',
+			class: 'text-right',
+			cell: ({ row }) => renderSnippet(inviteActionsCell, row.original)
+		}
+	];
+
 	async function revoke(inv: Invite) {
 		try {
 			await accountsApi.deleteInvite(inv.id);
@@ -171,7 +208,14 @@
 	<title>Team · pushq</title>
 </svelte:head>
 
-<div class="space-y-6">
+<PanelHeader
+	title={auth.saas ? 'Team' : 'Team members'}
+	description={auth.saas
+		? 'Everyone in the team can work with all of its applications, with the role you give them.'
+		: 'People who can sign in to this server, and what they may do.'}
+/>
+
+<div class="mt-6 space-y-6">
 	<ErrorAlert message={error} />
 
 	{#if auth.saas}
@@ -218,64 +262,12 @@
 		</Card.Content>
 	</Card.Root>
 
-	<div class="rounded-xl border">
-		<Table.Root>
-			<Table.Header>
-				<Table.Row>
-					<Table.Head>Member</Table.Head>
-					<Table.Head>Role</Table.Head>
-					<Table.Head class="hidden sm:table-cell">Last sign-in</Table.Head>
-					<Table.Head class="text-right">Actions</Table.Head>
-				</Table.Row>
-			</Table.Header>
-			<Table.Body>
-				{#if users === null}
-					<Table.Row><Table.Cell colspan={4} class="h-16 text-center text-muted-foreground">Loading…</Table.Cell></Table.Row>
-				{:else}
-					{#each pagedUsers.rows as u (u.id)}
-						<Table.Row>
-							<Table.Cell>
-								<p class="font-medium">
-									{u.name || u.email}
-									{#if u.id === auth.user?.id}<span class="ml-1 text-xs font-normal text-muted-foreground">(you)</span>{/if}
-								</p>
-								{#if u.name}<p class="text-xs text-muted-foreground">{u.email}</p>{/if}
-							</Table.Cell>
-							<Table.Cell>
-								<select
-									value={u.role}
-									onchange={(e) => changeRole(u, e.currentTarget.value as Role)}
-									class="h-8 rounded-md border border-input bg-background px-2 text-sm"
-									aria-label={`Role for ${u.email}`}
-								>
-									{#each roles as r (r.value)}<option value={r.value}>{r.label}</option>{/each}
-								</select>
-							</Table.Cell>
-							<Table.Cell class="hidden text-muted-foreground sm:table-cell">
-								{#if u.last_login_at}<TimeStamp value={u.last_login_at} />{:else}never{/if}
-							</Table.Cell>
-							<Table.Cell class="text-right">
-								<div class="flex justify-end gap-1">
-									{#if !auth.saas}
-										<Button variant="ghost" size="sm" onclick={() => resetLink(u)}>Reset password</Button>
-									{/if}
-									<Button
-										variant="ghost"
-										size="sm"
-										class="text-destructive hover:text-destructive"
-										onclick={() => {
-											removeTarget = u;
-											removeOpen = true;
-										}}>Remove</Button
-									>
-								</div>
-							</Table.Cell>
-						</Table.Row>
-					{/each}
-				{/if}
-			</Table.Body>
-		</Table.Root>
-	</div>
+	<DataTable
+		data={users === null ? null : pagedUsers.rows}
+		columns={userColumns}
+		getRowId={(u) => String(u.id)}
+		empty="No members yet."
+	/>
 	{#if users && users.length > 0}
 		<Pager
 			bind:page={userPage}
@@ -291,24 +283,7 @@
 	{#if invites.length > 0}
 		<div class="space-y-2">
 			<h2 class="text-sm font-semibold">Pending invites</h2>
-			<div class="rounded-xl border">
-				<Table.Root>
-					<Table.Body>
-						{#each pagedInvites.rows as inv (inv.id)}
-							<Table.Row>
-								<Table.Cell class="font-medium">{inv.email}</Table.Cell>
-								<Table.Cell class="capitalize text-muted-foreground">{inv.role}</Table.Cell>
-								<Table.Cell class="hidden text-muted-foreground sm:table-cell">
-									expires <TimeStamp value={inv.expires_at} />
-								</Table.Cell>
-								<Table.Cell class="text-right">
-									<Button variant="ghost" size="sm" onclick={() => revoke(inv)}>Revoke</Button>
-								</Table.Cell>
-							</Table.Row>
-						{/each}
-					</Table.Body>
-				</Table.Root>
-			</div>
+			<DataTable data={pagedInvites.rows} columns={inviteColumns} getRowId={(inv) => String(inv.id)} />
 			<Pager
 				bind:page={invitePage}
 				bind:pageSize={invitePageSize}
@@ -337,3 +312,51 @@
 	{busy}
 	onconfirm={remove}
 />
+
+{#snippet memberCell(u: User)}
+	<p class="font-medium">
+		{u.name || u.email}
+		{#if u.id === auth.user?.id}<span class="ml-1 text-xs font-normal text-muted-foreground">(you)</span>{/if}
+	</p>
+	{#if u.name}<p class="text-xs text-muted-foreground">{u.email}</p>{/if}
+{/snippet}
+
+{#snippet roleCell(u: User)}
+	<select
+		value={u.role}
+		onchange={(e) => changeRole(u, e.currentTarget.value as Role)}
+		class="h-8 rounded-md border border-input bg-background px-2 text-sm"
+		aria-label={`Role for ${u.email}`}
+	>
+		{#each roles as r (r.value)}<option value={r.value}>{r.label}</option>{/each}
+	</select>
+{/snippet}
+
+{#snippet lastSignInCell(u: User)}
+	{#if u.last_login_at}<TimeStamp value={u.last_login_at} />{:else}never{/if}
+{/snippet}
+
+{#snippet memberActionsCell(u: User)}
+	<div class="flex justify-end gap-1">
+		{#if !auth.saas}
+			<Button variant="ghost" size="sm" onclick={() => resetLink(u)}>Reset password</Button>
+		{/if}
+		<Button
+			variant="ghost"
+			size="sm"
+			class="text-destructive hover:text-destructive"
+			onclick={() => {
+				removeTarget = u;
+				removeOpen = true;
+			}}>Remove</Button
+		>
+	</div>
+{/snippet}
+
+{#snippet expiresCell(inv: Invite)}
+	expires <TimeStamp value={inv.expires_at} />
+{/snippet}
+
+{#snippet inviteActionsCell(inv: Invite)}
+	<Button variant="ghost" size="sm" onclick={() => revoke(inv)}>Revoke</Button>
+{/snippet}

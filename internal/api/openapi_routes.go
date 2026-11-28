@@ -59,8 +59,11 @@ var routeDocs = map[string]opDoc{
 		Description: "Public when `metrics.public` is set in the server config."},
 	"GET /openapi.json": {Tag: "System", Summary: "This OpenAPI document", Access: accessPublic, ContentType: "application/json",
 		Description: "Generated from the server's routes at runtime."},
-	"GET /docs":       {Tag: "System", Summary: "Interactive API docs (Swagger UI)", Access: accessPublic, ContentType: "text/html"},
-	"GET /v1/version": {Tag: "System", Summary: "Server version", Access: accessRead, Response: types.VersionResponse{}},
+	"GET /docs": {Tag: "System", Summary: "Interactive API docs (Swagger UI)", Access: accessPublic, ContentType: "text/html"},
+	"GET /openapi/console.json": {Tag: "System", Summary: "This OpenAPI document", Access: accessPublic, ContentType: "application/json",
+		Description: "The console API, generated from the server's routes at runtime."},
+	"GET /docs/console": {Tag: "System", Summary: "Interactive console API docs (Swagger UI)", Access: accessPublic, ContentType: "text/html"},
+	"GET /v1/version":   {Tag: "System", Summary: "Server version", Access: accessRead, Response: types.VersionResponse{}},
 
 	// --- queues ---
 	"POST /v1/queues": {Tag: "Queues", Summary: "Create a queue", Access: accessWrite,
@@ -163,6 +166,16 @@ var routeDocs = map[string]opDoc{
 		Request: inviteCreateBody{}, Response: inviteCreated{}, Status: 201,
 		Description: "Self-hosted: returns a single-use link to send. SaaS mode: WorkOS emails the invitation."},
 	"DELETE /v1/invites/{id}": {Tag: "Team members", Summary: "Revoke an invite", Access: accessManage},
+
+	// --- applications ---
+	"GET /v1/apps": {Tag: "Applications", Summary: "List applications", Access: accessRead, Response: appsList{},
+		Description: "Every queue belongs to one application. A key restricted to an application sees only that one."},
+	"POST /v1/apps": {Tag: "Applications", Summary: "Create an application", Access: accessManage,
+		Request: appCreateBody{}, Response: appDTO{}, Status: 201},
+	"PATCH /v1/apps/{id}": {Tag: "Applications", Summary: "Rename an application or change its icon", Access: accessManage,
+		Request: appPatchBody{}, Response: appDTO{}, Description: "Only the fields you send change."},
+	"DELETE /v1/apps/{id}": {Tag: "Applications", Summary: "Delete an application", Access: accessManage,
+		Description: "Its queues must be deleted first. API keys restricted to it are revoked. The Default application can't be deleted."},
 
 	// --- API keys ---
 	"GET /v1/api-keys": {Tag: "API keys", Summary: "List API keys", Access: accessManage, Response: keysList{},

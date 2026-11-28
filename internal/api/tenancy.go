@@ -8,20 +8,37 @@ import (
 	"github.com/blissfulrays/pushq/internal/store"
 )
 
-// Team isolation (SaaS mode).
+// Team and application isolation.
 //
-// A team's queues are stored as "<ns>:<name>". Queue names can't contain ":",
-// so a name a client sends can never reach outside its own namespace. These
-// helpers are the only place names cross that boundary: inName on the way
-// in, the *Out helpers on the way out. Self-hosted callers and the operator's
-// config-file keys have no namespace, so their names pass through unchanged.
+// Every queue belongs to an application, and an application is a queue
+// namespace: its queues are stored as "<ns>:<name>". Queue names can't
+// contain ":", so a name a client sends can never reach outside its own
+// namespace. These helpers are the only place names cross that boundary:
+// inName on the way in, the *Out helpers on the way out. The self-hosted
+// Default application has ns "" (names pass through unchanged), and so do
+// the operator's config-file keys in SaaS mode, which act instance-wide.
 
-// teamPrefix is "<ns>:" for a team-scoped caller, "" otherwise.
+// teamPrefix is "<ns>:" for the caller's application ("" when its ns is "").
 func teamPrefix(r *http.Request) string {
-	if t := principal(r).Team; t != nil {
-		return t.NS + ":"
+	p := principal(r)
+	if p.App != nil {
+		if p.App.NS == "" {
+			return ""
+		}
+		return p.App.NS + ":"
+	}
+	if p.Team != nil {
+		return p.Team.NS + ":"
 	}
 	return ""
+}
+
+// rootOnly reports whether queue listings must skip namespaced names: the
+// self-hosted Default application shares the unprefixed space with the
+// stored names of every other application.
+func rootOnly(r *http.Request) bool {
+	a := principal(r).App
+	return a != nil && a.NS == ""
 }
 
 // inName maps a client-supplied queue name to its stored name.

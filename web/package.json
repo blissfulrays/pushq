@@ -13,13 +13,17 @@
 		"swagger": "node -e \"const fs=require('fs');fs.mkdirSync('build/docs',{recursive:true});for(const f of ['swagger-ui-bundle.js','swagger-ui.css','LICENSE'])fs.copyFileSync('node_modules/swagger-ui-dist/'+f,'build/docs/'+f)\""
 	},
 	"devDependencies": {
+		"@fontsource-variable/geist": "^5.2.8",
+		"@fontsource-variable/geist-mono": "^5.2.7",
+		"@lucide/svelte": "^0.482.0",
 		"@sveltejs/adapter-static": "^3.0.8",
 		"@sveltejs/kit": "^2.22.0",
 		"@sveltejs/vite-plugin-svelte": "^6.0.0",
+		"@tanstack/svelte-table": "^9.2.6",
 		"autoprefixer": "^10.4.20",
 		"clsx": "^2.1.1",
 		"postcss": "^8.4.49",
-		"svelte": "^5.25.0",
+		"svelte": "^5.59.2",
 		"svelte-check": "^4.1.0",
 		"swagger-ui-dist": "5.34.1",
 		"tailwind-merge": "^2.6.0",

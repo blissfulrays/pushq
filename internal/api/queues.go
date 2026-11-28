@@ -98,8 +98,9 @@ func (s *Server) handleQueuePatch(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleQueueList(w http.ResponseWriter, r *http.Request) {
 	opts := store.ListQueuesOpts{
-		// A team only ever lists inside its own namespace.
+		// An application only ever lists inside its own namespace.
 		NamePrefix: teamPrefix(r) + r.URL.Query().Get("name_prefix"),
+		RootOnly:   rootOnly(r),
 		PageToken:  r.URL.Query().Get("page_token"),
 	}
 	if v := r.URL.Query().Get("page_size"); v != "" {

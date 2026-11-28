@@ -5,7 +5,16 @@ const config: Config = {
 	content: ['./src/**/*.{html,js,svelte,ts}'],
 	theme: {
 		extend: {
+			fontFamily: {
+				sans: ['"Geist Variable"', 'Arial', 'sans-serif'],
+				mono: ['"Geist Mono Variable"', 'ui-monospace', 'SFMono-Regular', 'Menlo', 'monospace']
+			},
 			colors: {
+				brand: 'hsl(var(--brand) / <alpha-value>)',
+				success: 'hsl(var(--success) / <alpha-value>)',
+				warning: 'hsl(var(--warning) / <alpha-value>)',
+				subtle: 'hsl(var(--subtle) / <alpha-value>)',
+				edge: 'hsl(var(--edge) / <alpha-value>)',
 				border: 'hsl(var(--border) / <alpha-value>)',
 				input: 'hsl(var(--input) / <alpha-value>)',
 				ring: 'hsl(var(--ring) / <alpha-value>)',
@@ -41,6 +50,8 @@ const config: Config = {
 				}
 			},
 			borderRadius: {
+				'2xl': 'calc(var(--radius) * 1.8)',
+				xl: 'calc(var(--radius) * 1.4)',
 				lg: 'var(--radius)',
 				md: 'calc(var(--radius) - 2px)',
 				sm: 'calc(var(--radius) - 4px)'

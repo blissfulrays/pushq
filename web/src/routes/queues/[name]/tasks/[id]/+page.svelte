@@ -7,10 +7,14 @@
 	import { folderOf, leafOf, queueHref } from '$lib/folders';
 	import { api, errorMessage, type Attempt, type Task } from '$lib/api';
 	import { auth } from '$lib/auth.svelte';
+	import { appContext } from '$lib/app-context.svelte';
+	import { apps } from '$lib/apps.svelte';
 	import { absoluteTime, decodeBody, duration, millis, num, truncateMiddle } from '$lib/format';
 	import { Button } from '$lib/components/ui/button';
 	import * as Card from '$lib/components/ui/card';
-	import * as Table from '$lib/components/ui/table';
+	import DataTable from '$lib/components/data-table/DataTable.svelte';
+	import type { Column } from '$lib/components/data-table/features';
+	import { renderSnippet } from '@tanstack/svelte-table';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 	import ErrorAlert from '$lib/components/ErrorAlert.svelte';
 	import StateBadge from '$lib/components/StateBadge.svelte';
@@ -24,6 +28,31 @@
 	let attemptPage = $state(1);
 	let attemptPageSize = $state(storedPageSize('attempts', 25));
 	const pagedAttempts = $derived(paginate(attempts ?? [], attemptPage, attemptPageSize));
+
+	const dash = '—';
+	const attemptColumns: Column<Attempt>[] = [
+		{ id: 'number', header: '#', class: 'pl-6 tabular-nums', cell: ({ row }) => num(row.original.number) },
+		{
+			id: 'dispatched',
+			header: 'Dispatched',
+			class: 'text-muted-foreground',
+			cell: ({ row }) => renderSnippet(dispatchedCell, row.original)
+		},
+		{ id: 'status', header: 'Status', cell: ({ row }) => renderSnippet(statusCell, row.original) },
+		{ id: 'kind', header: 'Error kind', cell: ({ row }) => renderSnippet(kindCell, row.original) },
+		{
+			id: 'duration',
+			header: 'Duration',
+			class: 'text-right tabular-nums',
+			cell: ({ row }) => millis(row.original.duration_ms)
+		},
+		{
+			id: 'snippet',
+			header: 'Error snippet',
+			class: 'max-w-64 pr-6',
+			cell: ({ row }) => renderSnippet(snippetCell, row.original)
+		}
+	];
 	$effect(() => {
 		if (attemptPage !== pagedAttempts.page) attemptPage = pagedAttempts.page;
 	});
@@ -49,6 +78,8 @@
 
 	$effect(() => {
 		auth.key;
+		appContext.id;
+		if (apps.list === null) return; // wait until the application is known
 		const q = qname;
 		const id = taskId;
 		if (!q || !id) return;
@@ -148,7 +179,7 @@
 
 	{#if notice}
 		<div
-			class="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-2.5 text-sm text-emerald-700 dark:text-emerald-400"
+			class="rounded-lg border border-success/30 bg-success/10 px-4 py-2.5 text-sm text-success"
 		>
 			{notice}
 		</div>
@@ -267,78 +298,13 @@
 				<Card.Description>Delivery history, newest first.</Card.Description>
 			</Card.Header>
 			<Card.Content class="px-0 pb-0">
-				<Table.Root>
-					<Table.Header>
-						<Table.Row>
-							<Table.Head class="pl-6">#</Table.Head>
-							<Table.Head>Dispatched</Table.Head>
-							<Table.Head>Status</Table.Head>
-							<Table.Head>Error kind</Table.Head>
-							<Table.Head class="text-right">Duration</Table.Head>
-							<Table.Head class="pr-6">Error snippet</Table.Head>
-						</Table.Row>
-					</Table.Header>
-					<Table.Body>
-						{#if attempts === null}
-							<Table.Row>
-								<Table.Cell colspan={6} class="h-16 text-center text-muted-foreground">
-									Loading…
-								</Table.Cell>
-							</Table.Row>
-						{:else if attempts.length === 0}
-							<Table.Row>
-								<Table.Cell colspan={6} class="h-16 text-center text-muted-foreground">
-									No attempts yet.
-								</Table.Cell>
-							</Table.Row>
-						{:else}
-							{#each pagedAttempts.rows as a (a.number)}
-								<Table.Row>
-									<Table.Cell class="pl-6 tabular-nums">{num(a.number)}</Table.Cell>
-									<Table.Cell class="text-muted-foreground">
-										<TimeStamp value={a.dispatch_time} />
-									</Table.Cell>
-									<Table.Cell>
-										{#if a.response_status}
-											<span
-												class="font-mono text-xs {a.response_status < 400
-													? 'text-emerald-600 dark:text-emerald-400'
-													: 'text-red-600 dark:text-red-400'}"
-											>
-												{a.response_status}
-											</span>
-										{:else}
-											<span class="text-muted-foreground">—</span>
-										{/if}
-									</Table.Cell>
-									<Table.Cell>
-										{#if a.error_kind}
-											<span class="font-mono text-xs">{a.error_kind}</span>
-										{:else}
-											<span class="text-muted-foreground">—</span>
-										{/if}
-									</Table.Cell>
-									<Table.Cell class="text-right tabular-nums">{millis(a.duration_ms)}</Table.Cell>
-									<Table.Cell class="max-w-64 pr-6">
-										{#if a.error_snippet}
-											<details>
-												<summary
-													class="cursor-pointer text-xs text-muted-foreground hover:text-foreground"
-												>
-													show
-												</summary>
-												<pre
-													class="mt-2 max-h-48 overflow-auto whitespace-pre-wrap rounded-md bg-muted p-2 font-mono text-xs">{a.error_snippet}</pre>
-											</details>
-										{:else}
-											<span class="text-muted-foreground">—</span>
-										{/if}
-									</Table.Cell>
-								</Table.Row>
-							{/each}
-						{/if}
-					</Table.Body>
-				</Table.Root>
+				<DataTable
+					class="rounded-none border-0"
+					data={attempts === null ? null : pagedAttempts.rows}
+					columns={attemptColumns}
+					getRowId={(a) => String(a.number)}
+					empty="No attempts yet."
+				/>
 				{#if attempts && attempts.length > 0}
 					<div class="border-t px-6 py-3">
 						<Pager
@@ -367,3 +333,41 @@
 	{busy}
 	onconfirm={doDelete}
 />
+
+{#snippet dispatchedCell(a: Attempt)}
+	<TimeStamp value={a.dispatch_time} />
+{/snippet}
+
+{#snippet statusCell(a: Attempt)}
+	{#if a.response_status}
+		<span
+			class="font-mono text-xs {a.response_status < 400
+				? 'text-success'
+				: 'text-destructive'}"
+		>
+			{a.response_status}
+		</span>
+	{:else}
+		<span class="text-muted-foreground">{dash}</span>
+	{/if}
+{/snippet}
+
+{#snippet kindCell(a: Attempt)}
+	{#if a.error_kind}
+		<span class="font-mono text-xs">{a.error_kind}</span>
+	{:else}
+		<span class="text-muted-foreground">{dash}</span>
+	{/if}
+{/snippet}
+
+{#snippet snippetCell(a: Attempt)}
+	{#if a.error_snippet}
+		<details>
+			<summary class="cursor-pointer text-xs text-muted-foreground hover:text-foreground">show</summary>
+			<pre
+				class="mt-2 max-h-48 overflow-auto whitespace-pre-wrap rounded-md bg-muted p-2 font-mono text-xs">{a.error_snippet}</pre>
+		</details>
+	{:else}
+		<span class="text-muted-foreground">{dash}</span>
+	{/if}
+{/snippet}

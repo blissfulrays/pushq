@@ -31,6 +31,7 @@ type client struct {
 	http   *http.Client
 	bearer string
 	noCSRF bool
+	app    string // X-PushQ-App
 }
 
 func newAccountsServer(t *testing.T, keys []config.APIKey) string {
@@ -72,6 +73,9 @@ func (c *client) do(method, path string, body any) (int, map[string]any) {
 	}
 	if c.bearer != "" {
 		req.Header.Set("Authorization", "Bearer "+c.bearer)
+	}
+	if c.app != "" {
+		req.Header.Set(api.AppHeader, c.app)
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {

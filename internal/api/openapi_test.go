@@ -54,8 +54,58 @@ func TestOpenAPIDocsMatchRoutes(t *testing.T) {
 	}
 }
 
+// The SDK and console documents split the routes between them: each route
+// appears in exactly one.
+func TestOpenAPIAudiencesPartitionRoutes(t *testing.T) {
+	s := docServer()
+	seen := map[string]Audience{}
+	for _, aud := range []Audience{AudienceSDK, AudienceConsole} {
+		raw, err := s.OpenAPISpec(aud)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var spec struct {
+			Paths map[string]map[string]any `json:"paths"`
+		}
+		if err := json.Unmarshal(raw, &spec); err != nil {
+			t.Fatal(err)
+		}
+		for path, ops := range spec.Paths {
+			for method := range ops {
+				k := strings.ToUpper(method) + " " + path
+				if prev, dup := seen[k]; dup {
+					t.Errorf("%s is in both the %s and %s documents", k, prev, aud)
+				}
+				seen[k] = aud
+			}
+		}
+	}
+	if len(seen) != len(routeDocs) {
+		t.Errorf("documents cover %d routes, routeDocs has %d", len(seen), len(routeDocs))
+	}
+	for k, want := range map[string]Audience{
+		"POST /v1/queues/{queue}/tasks": AudienceSDK,
+		"GET /v1/apps":                  AudienceSDK,
+		"POST /v1/apps":                 AudienceConsole,
+		"POST /v1/api-keys":             AudienceConsole,
+		"POST /v1/auth/login":           AudienceConsole,
+		"GET /healthz":                  AudienceSDK,
+		"GET /docs/console":             AudienceConsole,
+	} {
+		if seen[k] != want {
+			t.Errorf("%s: in %q, want %q", k, seen[k], want)
+		}
+	}
+}
+
 func TestOpenAPISpecIsConsistent(t *testing.T) {
-	raw, err := docServer().OpenAPISpec()
+	for _, aud := range []Audience{AudienceSDK, AudienceConsole} {
+		t.Run(string(aud), func(t *testing.T) { checkSpec(t, docServer(), aud) })
+	}
+}
+
+func checkSpec(t *testing.T, s *Server, aud Audience) {
+	raw, err := s.OpenAPISpec(aud)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +120,7 @@ func TestOpenAPISpecIsConsistent(t *testing.T) {
 	if err := json.Unmarshal(raw, &spec); err != nil {
 		t.Fatal(err)
 	}
-	if spec.OpenAPI != "3.1.0" || len(spec.Paths) < 30 || len(spec.Undocumented) > 0 {
+	if spec.OpenAPI != "3.1.0" || len(spec.Paths) < 12 || len(spec.Undocumented) > 0 {
 		t.Fatalf("openapi=%q paths=%d undocumented=%v", spec.OpenAPI, len(spec.Paths), spec.Undocumented)
 	}
 
@@ -116,6 +166,13 @@ func TestOpenAPISpecIsConsistent(t *testing.T) {
 	}
 
 	// Spot-check that shapes come from the handlers' Go types.
+	if aud == AudienceConsole {
+		keyRole := spec.Components.Schemas["KeyCreateBody"]["properties"].(map[string]any)["role"].(map[string]any)
+		if enum, _ := keyRole["enum"].([]any); len(enum) != 2 {
+			t.Errorf("enum tag not applied: %v", keyRole)
+		}
+		return
+	}
 	post := spec.Paths["/v1/queues/{queue}/tasks"]["post"]
 	if b, _ := json.Marshal(post); !strings.Contains(string(b), `"#/components/schemas/TaskCreate"`) ||
 		!strings.Contains(string(b), `"201"`) {
@@ -127,8 +184,7 @@ func TestOpenAPISpecIsConsistent(t *testing.T) {
 			t.Errorf("TaskCreate schema lacks %q", f)
 		}
 	}
-	keyRole := spec.Components.Schemas["KeyCreateBody"]["properties"].(map[string]any)["role"].(map[string]any)
-	if enum, _ := keyRole["enum"].([]any); len(enum) != 2 {
-		t.Errorf("enum tag not applied: %v", keyRole)
+	if b, _ := json.Marshal(post); !strings.Contains(string(b), `"X-PushQ-App"`) {
+		t.Errorf("queue routes don't document the %s header", AppHeader)
 	}
 }

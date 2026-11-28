@@ -125,7 +125,7 @@ func TestTeams(t *testing.T) {
 		}
 
 		// API keys belong to one team.
-		_, k, _ := a.CreateAPIKey(ctx, acme.ID, "acme-app", accounts.KeyWriter, &alice.ID, now)
+		_, k, _ := a.CreateAPIKey(ctx, acme.ID, 0, "acme-app", accounts.KeyWriter, &alice.ID, now)
 		if keys, _ := a.ListAPIKeys(ctx, other.ID); len(keys) != 0 {
 			t.Fatal("other team sees acme's key")
 		}

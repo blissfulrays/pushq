@@ -1,3 +1,4 @@
+import { appContext } from '$lib/app-context.svelte';
 import { auth, type Role, type User } from '$lib/auth.svelte';
 
 /** RFC 9457 problem+json body. */
@@ -153,6 +154,8 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 	headers.set('X-Requested-With', 'pushq');
 	if (init.body !== undefined) headers.set('Content-Type', 'application/json');
 	if (auth.key) headers.set('Authorization', `Bearer ${auth.key}`);
+	// Queues and tasks live in the application picked in the app rail.
+	if (appContext.id && path.startsWith('/v1/queues')) headers.set('X-PushQ-App', String(appContext.id));
 	const res = await fetch(`${window.location.origin}${path}`, { ...init, headers });
 	let data: unknown;
 	const text = await res.text();
@@ -188,11 +191,33 @@ export interface Invite {
 	expires_at: string;
 }
 
+export interface App {
+	id: number;
+	name: string;
+	/** A small image as a data: URL; absent = show the initials. */
+	icon?: string;
+	/** The team's Default application; it can't be deleted. */
+	default: boolean;
+	created_at: string;
+}
+
+export const appsApi = {
+	list: () => request<{ apps: App[] }>('/v1/apps'),
+	create: (name: string, icon?: string) => request<App>('/v1/apps', json('POST', { name, icon: icon || undefined })),
+	/** Only the given fields change; icon "" removes the icon. */
+	update: (id: number, patch: { name?: string; icon?: string }) =>
+		request<App>(`/v1/apps/${id}`, json('PATCH', patch)),
+	remove: (id: number) => request<void>(`/v1/apps/${id}`, { method: 'DELETE' })
+};
+
 export interface ApiKey {
 	id: number;
 	name: string;
 	prefix: string;
 	role: KeyRole;
+	/** Set when the key can only reach this application. */
+	app_id?: number;
+	app_name?: string;
 	created_by?: string;
 	created_at: string;
 	last_used_at?: string;
@@ -258,8 +283,9 @@ export const accountsApi = {
 	deleteInvite: (id: number) => request<void>(`/v1/invites/${id}`, { method: 'DELETE' }),
 
 	listKeys: () => request<{ keys: ApiKey[]; config_keys: number }>('/v1/api-keys'),
-	createKey: (name: string, role: KeyRole) =>
-		request<{ key: ApiKey; secret: string }>('/v1/api-keys', json('POST', { name, role })),
+	/** appId restricts the key to one application; omit for all of them. */
+	createKey: (name: string, role: KeyRole, appId?: number) =>
+		request<{ key: ApiKey; secret: string }>('/v1/api-keys', json('POST', { name, role, app_id: appId })),
 	deleteKey: (id: number) => request<void>(`/v1/api-keys/${id}`, { method: 'DELETE' })
 };
 

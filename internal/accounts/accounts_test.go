@@ -60,7 +60,7 @@ func backends() []backend {
 			}
 			t.Cleanup(func() { st.Close() })
 			w, r := st.SQLHandles()
-			if _, err := w.Exec(`DROP TABLE IF EXISTS team_invites, team_members, teams, api_keys, invites, sessions, users, task_attempts, tasks, queues, schema_migrations CASCADE`); err != nil {
+			if _, err := w.Exec(`DROP TABLE IF EXISTS apps, team_invites, team_members, teams, api_keys, invites, sessions, users, task_attempts, tasks, queues, schema_migrations CASCADE`); err != nil {
 				t.Fatal(err)
 			}
 			if err := st.Migrate(context.Background()); err != nil {
@@ -279,7 +279,7 @@ func TestPasswordResetAndChange(t *testing.T) {
 func TestAPIKeys(t *testing.T) {
 	each(t, func(t *testing.T, a *accounts.Store) {
 		u, _ := a.Setup(ctx, "a@example.com", "", "correct horse", now)
-		key, k, err := a.CreateAPIKey(ctx, 0, "billing service", accounts.KeyWriter, &u.ID, now)
+		key, k, err := a.CreateAPIKey(ctx, 0, 0, "billing service", accounts.KeyWriter, &u.ID, now)
 		if err != nil {
 			t.Fatal(err)
 		}
