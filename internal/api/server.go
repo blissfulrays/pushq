@@ -52,6 +52,8 @@ func (s *Server) Router() http.Handler {
 	r.Get("/readyz", s.handleReadyz)
 	r.Get("/openapi.json", s.handleOpenAPI)
 	r.Get("/docs", s.handleDocs)
+	r.Get("/openapi/console.json", s.handleConsoleOpenAPI)
+	r.Get("/docs/console", s.handleConsoleDocs)
 	if s.MetricsHandler != nil {
 		if s.MetricsPublic {
 			r.Get("/metrics", s.MetricsHandler.ServeHTTP)
@@ -77,30 +79,43 @@ func (s *Server) Router() http.Handler {
 		r.Get("/auth/workos/callback", s.handleWorkOSCallback)
 		r.Post("/auth/invites/{token}:accept", s.handleInviteAccept)
 
-		read := r.With(s.require(auth.PermRead))
-		write := r.With(s.require(auth.PermWrite))
+		r.With(s.require(auth.PermRead)).Get("/version", s.handleVersion)
 
-		read.Get("/version", s.handleVersion)
+		// Queues and tasks act inside one application (withApp).
+		r.Group(func(r chi.Router) {
+			r.Use(s.withApp)
+			read := r.With(s.require(auth.PermRead))
+			write := r.With(s.require(auth.PermWrite))
 
-		write.Post("/queues", s.handleQueueCreate)
-		write.Put("/queues/{queue}", s.handleQueuePut)
-		read.Get("/queues/{queue}", s.handleQueueGet)
-		write.Patch("/queues/{queue}", s.handleQueuePatch)
-		write.Post("/queues/{queue}:pause", s.handleQueuePause)
-		write.Post("/queues/{queue}:resume", s.handleQueueResume)
-		write.Post("/queues/{queue}:purge", s.handleQueuePurge)
-		read.Get("/queues/{queue}/stats", s.handleQueueStats)
+			write.Post("/queues", s.handleQueueCreate)
+			write.Put("/queues/{queue}", s.handleQueuePut)
+			read.Get("/queues/{queue}", s.handleQueueGet)
+			write.Patch("/queues/{queue}", s.handleQueuePatch)
+			write.Post("/queues/{queue}:pause", s.handleQueuePause)
+			write.Post("/queues/{queue}:resume", s.handleQueueResume)
+			write.Post("/queues/{queue}:purge", s.handleQueuePurge)
+			read.Get("/queues/{queue}/stats", s.handleQueueStats)
 
-		write.Post("/queues/{queue}/tasks", s.handleTaskCreate)
-		write.Post("/queues/{queue}/tasks:batch", s.handleTaskBatch)
-		read.Get("/queues/{queue}/tasks", s.handleTaskList)
-		read.Get("/queues/{queue}/tasks/{taskID}", s.handleTaskGet)
-		write.Delete("/queues/{queue}/tasks/{taskID}", s.handleTaskDelete)
-		write.Post("/queues/{queue}/tasks/{taskID}:run", s.handleTaskRun)
-		read.Get("/queues/{queue}/tasks/{taskID}/attempts", s.handleAttemptsList)
+			write.Post("/queues/{queue}/tasks", s.handleTaskCreate)
+			write.Post("/queues/{queue}/tasks:batch", s.handleTaskBatch)
+			read.Get("/queues/{queue}/tasks", s.handleTaskList)
+			read.Get("/queues/{queue}/tasks/{taskID}", s.handleTaskGet)
+			write.Delete("/queues/{queue}/tasks/{taskID}", s.handleTaskDelete)
+			write.Post("/queues/{queue}/tasks/{taskID}:run", s.handleTaskRun)
+			read.Get("/queues/{queue}/tasks/{taskID}/attempts", s.handleAttemptsList)
 
-		r.With(s.require(auth.PermList)).Get("/queues", s.handleQueueList)
-		r.With(s.require(auth.PermDeleteQueue)).Delete("/queues/{queue}", s.handleQueueDelete)
+			r.With(s.require(auth.PermList)).Get("/queues", s.handleQueueList)
+			r.With(s.require(auth.PermDeleteQueue)).Delete("/queues/{queue}", s.handleQueueDelete)
+		})
+
+		// Applications of the caller's team (self-hosted: of the server).
+		r.With(s.require(auth.PermRead), s.requireAccounts).Get("/apps", s.handleAppList)
+		r.Group(func(r chi.Router) {
+			r.Use(s.require(auth.PermManage), s.requireAccounts)
+			r.Post("/apps", s.handleAppCreate)
+			r.Patch("/apps/{id}", s.handleAppUpdate)
+			r.Delete("/apps/{id}", s.handleAppDelete)
+		})
 
 		// The signed-in user's own account.
 		r.Group(func(r chi.Router) {

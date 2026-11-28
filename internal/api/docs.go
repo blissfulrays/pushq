@@ -16,7 +16,7 @@ var docsPage = template.Must(template.New("docs").Parse(`<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>pushq API</title>
+<title>{{.Title}}</title>
 <link rel="icon" href="/favicon.svg">
 <link rel="stylesheet" href="{{.Assets}}/swagger-ui.css">
 <style>
@@ -29,12 +29,12 @@ var docsPage = template.Must(template.New("docs").Parse(`<!doctype html>
 </style>
 </head>
 <body>
-<div class="pq-bar"><strong>pushq API</strong><a href="/">← Dashboard</a></div>
+<div class="pq-bar"><strong>{{.Title}}</strong><span><a href="{{.OtherURL}}">{{.OtherLabel}}</a> · <a href="/">Dashboard</a></span></div>
 <div id="swagger"></div>
 <script src="{{.Assets}}/swagger-ui-bundle.js"></script>
 <script>
   window.ui = SwaggerUIBundle({
-    url: "/openapi.json",
+    url: "{{.SpecURL}}",
     dom_id: "#swagger",
     deepLinking: true,
     persistAuthorization: true,
@@ -51,10 +51,23 @@ var docsPage = template.Must(template.New("docs").Parse(`<!doctype html>
 // the binary (so it works offline); a binary built without the dashboard
 // falls back to the same pinned version on a CDN.
 func (s *Server) handleDocs(w http.ResponseWriter, r *http.Request) {
-	assets := "/docs"
+	serveDocs(w, docsData{Title: "pushq API", SpecURL: "/openapi.json", OtherURL: "/docs/console", OtherLabel: "Console API"})
+}
+
+// handleConsoleDocs serves Swagger UI for the console (dashboard) API.
+func (s *Server) handleConsoleDocs(w http.ResponseWriter, r *http.Request) {
+	serveDocs(w, docsData{Title: "pushq console API", SpecURL: "/openapi/console.json", OtherURL: "/docs", OtherLabel: "SDK API"})
+}
+
+type docsData struct {
+	Title, SpecURL, OtherURL, OtherLabel, Assets string
+}
+
+func serveDocs(w http.ResponseWriter, d docsData) {
+	d.Assets = "/docs"
 	if !web.HasFile("docs/swagger-ui-bundle.js") {
-		assets = "https://cdn.jsdelivr.net/npm/swagger-ui-dist@" + swaggerUIVersion
+		d.Assets = "https://cdn.jsdelivr.net/npm/swagger-ui-dist@" + swaggerUIVersion
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_ = docsPage.Execute(w, struct{ Assets string }{assets})
+	_ = docsPage.Execute(w, d)
 }

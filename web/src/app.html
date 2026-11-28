@@ -3,15 +3,15 @@
 	<head>
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta name="theme-color" content="#000000" />
 		<link rel="icon" href="%sveltekit.assets%/favicon.svg" type="image/svg+xml" />
 		<title>pushq</title>
 		<script>
 			(function () {
 				try {
 					var stored = localStorage.getItem('pushq_theme');
-					var dark = stored
-						? stored === 'dark'
-						: window.matchMedia('(prefers-color-scheme: dark)').matches;
+					// Dark by default, like pushqueue.dev; the toggle remembers a choice.
+					var dark = stored ? stored === 'dark' : true;
 					if (dark) document.documentElement.classList.add('dark');
 				} catch (e) {
 					/* noop */

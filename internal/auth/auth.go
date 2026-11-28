@@ -89,6 +89,15 @@ type Principal struct {
 	// callers and for the operator's config-file keys; a SaaS user with no
 	// team yet has Team == nil and no queue permissions.
 	Team *accounts.Team
+	// ConfigKey is set for the operator's config-file keys.
+	ConfigKey bool
+	// KeyAppID is set for an API key restricted to one application.
+	KeyAppID int64
+	// App is the application queue requests act in. It is resolved per
+	// request (from KeyAppID, the X-PushQ-App header or the team's Default
+	// application) by the API layer; nil means no namespace at all, which
+	// only the operator's keys in SaaS mode get.
+	App *accounts.App
 }
 
 func (p Principal) Can(x Perm) bool { return p.Perms&x == x }
@@ -191,7 +200,7 @@ func (a *Auth) Authenticate(r *http.Request) (p Principal, renewed *time.Time, e
 			return Principal{}, nil, nil
 		}
 		if role := a.ConfigKeyRole(token); role != "" {
-			return Principal{Kind: KindKey, Perms: PermsForKey(role), Role: string(role), KeyName: "config file"}, nil, nil
+			return Principal{Kind: KindKey, Perms: PermsForKey(role), Role: string(role), KeyName: "config file", ConfigKey: true}, nil, nil
 		}
 		if a.accounts != nil {
 			k, ok, err := a.accounts.LookupAPIKey(ctx, token, a.now())
@@ -199,7 +208,11 @@ func (a *Auth) Authenticate(r *http.Request) (p Principal, renewed *time.Time, e
 				return Principal{}, nil, err
 			}
 			if ok {
-				p := Principal{Kind: KindKey, Perms: PermsForKey(k.Role), Role: string(k.Role), KeyName: k.Name}
+				p := Principal{Kind: KindKey, Perms: PermsForKey(k.Role), Role: string(k.Role), KeyName: k.Name, KeyAppID: k.AppID}
+				if k.AppID > 0 {
+					// A key for one application can't manage the team, its keys or its applications.
+					p.Perms &^= PermManage
+				}
 				if k.TeamID > 0 {
 					t, err := a.accounts.GetTeam(ctx, k.TeamID)
 					if err != nil {

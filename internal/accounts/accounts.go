@@ -91,6 +91,8 @@ type Invite struct {
 type APIKey struct {
 	ID             int64
 	TeamID         int64 // 0 = not team-scoped (self-hosted)
+	AppID          int64 // 0 = any of the team's applications
+	AppName        string
 	Name           string
 	Prefix         string // first characters of the key, for recognition
 	Role           KeyRole
@@ -733,13 +735,27 @@ func (s *Store) AcceptInvite(ctx context.Context, token, name, password string, 
 
 // CreateAPIKey returns the plaintext key; only its digest is stored, so it
 // can never be shown again.
-func (s *Store) CreateAPIKey(ctx context.Context, teamID int64, name string, role KeyRole, createdBy *int64, now time.Time) (string, APIKey, error) {
+//
+// appID > 0 restricts the key to that one application of the team.
+func (s *Store) CreateAPIKey(ctx context.Context, teamID, appID int64, name string, role KeyRole, createdBy *int64, now time.Time) (string, APIKey, error) {
 	name = strings.TrimSpace(name)
 	if name == "" || len([]rune(name)) > 100 {
 		return "", APIKey{}, invalid("key name must be 1-100 characters")
 	}
 	if !role.Valid() {
 		return "", APIKey{}, invalid("key role must be admin or writer")
+	}
+	var app any
+	var appName string
+	if appID > 0 {
+		a, err := s.GetApp(ctx, teamID, appID)
+		if errors.Is(err, store.ErrNotFound) {
+			return "", APIKey{}, invalid("no such application")
+		}
+		if err != nil {
+			return "", APIKey{}, err
+		}
+		app, appName = appID, a.Name
 	}
 	key := newSecret("pq_", 24)
 	prefix := key[:11]
@@ -748,18 +764,20 @@ func (s *Store) CreateAPIKey(ctx context.Context, teamID int64, name string, rol
 	if teamID > 0 {
 		team = teamID
 	}
-	err := s.w.QueryRowContext(ctx, s.q(`INSERT INTO api_keys (name, prefix, key_hash, role, created_by, created_at, team_id)
-		VALUES (?,?,?,?,?,?,?) RETURNING id`), name, prefix, digest(key), string(role), createdBy, ms(now), team).Scan(&id)
+	err := s.w.QueryRowContext(ctx, s.q(`INSERT INTO api_keys (name, prefix, key_hash, role, created_by, created_at, team_id, app_id)
+		VALUES (?,?,?,?,?,?,?,?) RETURNING id`), name, prefix, digest(key), string(role), createdBy, ms(now), team, app).Scan(&id)
 	if err != nil {
 		return "", APIKey{}, err
 	}
-	return key, APIKey{ID: id, TeamID: teamID, Name: name, Prefix: prefix, Role: role, CreatedAt: fromMS(ms(now))}, nil
+	return key, APIKey{ID: id, TeamID: teamID, AppID: appID, AppName: appName, Name: name, Prefix: prefix, Role: role,
+		CreatedAt: fromMS(ms(now))}, nil
 }
 
 // ListAPIKeys lists one team's keys (teamID 0 = the self-hosted, unscoped keys).
 func (s *Store) ListAPIKeys(ctx context.Context, teamID int64) ([]APIKey, error) {
-	rows, err := s.r.QueryContext(ctx, s.q(`SELECT k.id, k.name, k.prefix, k.role, COALESCE(u.email, ''), k.created_at, k.last_used_at
-		FROM api_keys k LEFT JOIN users u ON u.id = k.created_by
+	rows, err := s.r.QueryContext(ctx, s.q(`SELECT k.id, k.name, k.prefix, k.role, COALESCE(u.email, ''), k.created_at, k.last_used_at,
+		COALESCE(k.app_id, 0), COALESCE(a.name, '')
+		FROM api_keys k LEFT JOIN users u ON u.id = k.created_by LEFT JOIN apps a ON a.id = k.app_id
 		WHERE COALESCE(k.team_id, 0)=? ORDER BY k.created_at DESC`), teamID)
 	if err != nil {
 		return nil, err
@@ -770,7 +788,7 @@ func (s *Store) ListAPIKeys(ctx context.Context, teamID int64) ([]APIKey, error)
 		var k APIKey
 		var created int64
 		var used sql.NullInt64
-		if err := rows.Scan(&k.ID, &k.Name, &k.Prefix, &k.Role, &k.CreatedByEmail, &created, &used); err != nil {
+		if err := rows.Scan(&k.ID, &k.Name, &k.Prefix, &k.Role, &k.CreatedByEmail, &created, &used, &k.AppID, &k.AppName); err != nil {
 			return nil, err
 		}
 		k.TeamID = teamID
@@ -798,9 +816,9 @@ func (s *Store) LookupAPIKey(ctx context.Context, key string, now time.Time) (AP
 	var k APIKey
 	var created int64
 	var used sql.NullInt64
-	err := s.r.QueryRowContext(ctx, s.q(`SELECT id, COALESCE(team_id, 0), name, prefix, role, created_at, last_used_at
+	err := s.r.QueryRowContext(ctx, s.q(`SELECT id, COALESCE(team_id, 0), COALESCE(app_id, 0), name, prefix, role, created_at, last_used_at
 		FROM api_keys WHERE key_hash=?`), digest(key)).
-		Scan(&k.ID, &k.TeamID, &k.Name, &k.Prefix, &k.Role, &created, &used)
+		Scan(&k.ID, &k.TeamID, &k.AppID, &k.Name, &k.Prefix, &k.Role, &created, &used)
 	if errors.Is(err, sql.ErrNoRows) {
 		return APIKey{}, false, nil
 	}

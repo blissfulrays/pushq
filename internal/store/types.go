@@ -241,8 +241,10 @@ const (
 
 type ListQueuesOpts struct {
 	NamePrefix string
-	PageSize   int
-	PageToken  string
+	// RootOnly skips namespaced names ("<ns>:name").
+	RootOnly  bool
+	PageSize  int
+	PageToken string
 }
 
 type ListTasksOpts struct {

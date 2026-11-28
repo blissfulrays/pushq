@@ -14,10 +14,12 @@ import (
 )
 
 // openapiCmd prints the OpenAPI document generated from the server's routes
-// (the same one a running server serves at /openapi.json). Handy for SDK
+// (the same one a running server serves at /openapi.json; --console prints
+// the dashboard's own API from /openapi/console.json). Handy for SDK
 // generators and CI; needs no database.
 func openapiCmd() *cobra.Command {
-	return &cobra.Command{
+	var console bool
+	cmd := &cobra.Command{
 		Use:   "openapi",
 		Short: "Print the OpenAPI spec generated from the API routes",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -26,7 +28,11 @@ func openapiCmd() *cobra.Command {
 				Log:            slog.New(slog.NewTextHandler(io.Discard, nil)),
 				MetricsHandler: http.NotFoundHandler(), // so /metrics is documented
 			}
-			spec, err := srv.OpenAPISpec()
+			aud := api.AudienceSDK
+			if console {
+				aud = api.AudienceConsole
+			}
+			spec, err := srv.OpenAPISpec(aud)
 			if err != nil {
 				return err
 			}
@@ -34,4 +40,6 @@ func openapiCmd() *cobra.Command {
 			return err
 		},
 	}
+	cmd.Flags().BoolVar(&console, "console", false, "print the console (dashboard) API instead of the SDK API (/openapi/console.json)")
+	return cmd
 }

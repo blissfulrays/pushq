@@ -114,6 +114,9 @@ func (s *Store) insertTeam(ctx context.Context, tx *sql.Tx, name, workosOrgID st
 		VALUES (?,?,?,?,?) RETURNING id`), ns, name, org, ms(now), ms(now)).Scan(&id); err != nil {
 		return Team{}, err
 	}
+	if err := s.insertDefaultApp(ctx, tx, id, ns, now); err != nil {
+		return Team{}, err
+	}
 	return Team{ID: id, NS: ns, Name: name, WorkOSOrgID: workosOrgID, CreatedAt: fromMS(ms(now))}, nil
 }
 

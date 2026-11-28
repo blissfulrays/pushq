@@ -32,8 +32,32 @@ type SpecRoute struct {
 	Path   string
 }
 
-// openAPI builds the spec for router.
-func openAPI(router chi.Routes) (map[string]any, error) {
+// Audience splits the routes into two documents: the SDK API that apps and
+// scripts call (queues, tasks), served at /openapi.json and /docs, and the
+// console API the dashboard itself uses (sign-in, teams, members, keys,
+// managing applications), at /openapi/console.json and /docs/console.
+type Audience string
+
+const (
+	AudienceSDK     Audience = "sdk"
+	AudienceConsole Audience = "console"
+)
+
+// audienceOf decides which document a route belongs in.
+func audienceOf(method, route string, op opDoc) Audience {
+	switch {
+	case route == "/openapi/console.json" || route == "/docs/console":
+		return AudienceConsole
+	case route == "/v1/queues" || strings.HasPrefix(route, "/v1/queues/"),
+		op.Tag == "System",
+		method == http.MethodGet && route == "/v1/apps": // lets a key find its application ids
+		return AudienceSDK
+	}
+	return AudienceConsole
+}
+
+// openAPI builds the spec for router's routes of one audience.
+func openAPI(router chi.Routes, aud Audience) (map[string]any, error) {
 	g := &schemaGen{components: map[string]any{}, names: map[reflect.Type]string{}}
 	paths := map[string]map[string]any{}
 	var undocumented []string
@@ -49,6 +73,9 @@ func openAPI(router chi.Routes) (map[string]any, error) {
 			undocumented = append(undocumented, method+" "+route)
 			op = opDoc{Summary: method + " " + route, Tag: "Other"}
 		}
+		if audienceOf(method, route, op) != aud {
+			return nil
+		}
 		if paths[route] == nil {
 			paths[route] = map[string]any{}
 		}
@@ -61,28 +88,18 @@ func openAPI(router chi.Routes) (map[string]any, error) {
 	sort.Strings(undocumented)
 
 	g.components["Problem"] = g.inline(reflect.TypeOf(problem{}))
+	title, desc := "pushq API", sdkDescription
+	if aud == AudienceConsole {
+		title, desc = "pushq console API", consoleDescription
+	}
 	spec := map[string]any{
 		"openapi": "3.1.0",
 		"info": map[string]any{
-			"title":   "pushq API",
-			"version": version.Version,
-			"description": strings.TrimSpace(`
-pushq is a self-hosted HTTP push task queue: an open-source alternative to Google Cloud Tasks.
-Tasks are delivered as HTTP requests to your endpoints with per-queue rate limits, concurrency caps
-and Cloud Tasks-compatible retries.
-
-**Authentication.** Send an API key as ` + "`Authorization: Bearer <key>`" + `. The dashboard uses a
-session cookie instead; requests that change something with the cookie must also send
-` + "`X-Requested-With: pushq`" + `.
-
-**Queue names** may contain ` + "`/`" + ` (folders, e.g. ` + "`user/instagram`" + `); in paths the whole
-name is one URL-encoded segment (` + "`user%2Finstagram`" + `).
-
-**Errors** are RFC 9457 problem+json with a stable ` + "`code`" + `.
-
-This document is generated from the running server's routes.`),
+			"title":       title,
+			"version":     version.Version,
+			"description": desc,
 		},
-		"tags":  tagOrder(),
+		"tags":  tagOrder(aud),
 		"paths": paths,
 		"components": map[string]any{
 			"schemas": g.components,
@@ -100,18 +117,58 @@ This document is generated from the running server's routes.`),
 	return spec, nil
 }
 
-func tagOrder() []map[string]any {
-	out := []map[string]any{}
-	for _, t := range []struct{ name, desc string }{
+var sdkDescription = strings.TrimSpace(`
+pushq is a self-hosted HTTP push task queue: an open-source alternative to Google Cloud Tasks.
+Tasks are delivered as HTTP requests to your endpoints with per-queue rate limits, concurrency caps
+and Cloud Tasks-compatible retries.
+
+**Authentication.** Send an API key as ` + "`Authorization: Bearer <key>`" + `. The dashboard uses a
+session cookie instead; requests that change something with the cookie must also send
+` + "`X-Requested-With: pushq`" + `.
+
+**Queue names** may contain ` + "`/`" + ` (folders, e.g. ` + "`user/instagram`" + `); in paths the whole
+name is one URL-encoded segment (` + "`user%2Finstagram`" + `).
+
+**Errors** are RFC 9457 problem+json with a stable ` + "`code`" + `.
+
+**Applications.** Every queue belongs to an application. A key restricted to one application always
+acts in it; any other key acts in the Default application unless the request names another with the
+` + "`X-PushQ-App: <id>`" + ` header (ids: ` + "`GET /v1/apps`" + `).
+
+This document is generated from the running server's routes. The endpoints the dashboard itself
+uses are documented separately at ` + "`/docs/console`" + `.`)
+
+var consoleDescription = strings.TrimSpace(`
+The endpoints the pushq dashboard (console) uses: sign-in, your account, teams, team members,
+API keys and managing applications. Apps and scripts don't need these; the queue and task API is
+documented at ` + "`/docs`" + `.
+
+The console authenticates with a session cookie; requests that change something with the cookie must
+also send ` + "`X-Requested-With: pushq`" + `.
+
+This document is generated from the running server's routes.`)
+
+func tagOrder(aud Audience) []map[string]any {
+	type tag struct{ name, desc string }
+	tags := []tag{
 		{"Queues", "Create, configure, pause and purge queues."},
 		{"Tasks", "Enqueue, inspect, run and delete tasks."},
-		{"Sign-in", "Dashboard sign-in. Self-hosted: local accounts. SaaS mode: email code or GitHub."},
-		{"Account", "The signed-in user."},
-		{"Teams", "SaaS mode: teams (WorkOS Organizations) and switching between them."},
-		{"Team members", "Members and invites of the current team (or the server, when self-hosted)."},
-		{"API keys", "Keys for apps and scripts."},
+		{"Applications", "Every queue belongs to an application."},
 		{"System", "Health, readiness, metrics and these docs."},
-	} {
+	}
+	if aud == AudienceConsole {
+		tags = []tag{
+			{"Sign-in", "Dashboard sign-in. Self-hosted: local accounts. SaaS mode: email code or GitHub."},
+			{"Account", "The signed-in user."},
+			{"Teams", "SaaS mode: teams (WorkOS Organizations) and switching between them."},
+			{"Team members", "Members and invites of the current team (or the server, when self-hosted)."},
+			{"Applications", "Create, rename and delete applications."},
+			{"API keys", "Keys for apps and scripts, optionally restricted to one application."},
+			{"System", "The console API docs."},
+		}
+	}
+	out := []map[string]any{}
+	for _, t := range tags {
 		out = append(out, map[string]any{"name": t.name, "description": t.desc})
 	}
 	return out
@@ -152,6 +209,13 @@ func (g *schemaGen) operation(method, route string, op opDoc) map[string]any {
 			p["schema"] = map[string]any{"type": "integer"}
 		}
 		params = append(params, p)
+	}
+	if route == "/v1/queues" || strings.HasPrefix(route, "/v1/queues/") {
+		params = append(params, map[string]any{
+			"name": AppHeader, "in": "header", "schema": map[string]any{"type": "integer"},
+			"description": "The application (id) to act in. Defaults to the key's application, or the Default " +
+				"application for keys that aren't restricted to one.",
+		})
 	}
 	if len(params) > 0 {
 		o["parameters"] = params
@@ -395,30 +459,45 @@ func schemaName(t reflect.Type, taken map[reflect.Type]string) string {
 
 // --- serving ---
 
-// specCache holds a server's generated spec (routes don't change after start).
+// specCache holds a server's generated specs (routes don't change after start).
 type specCache struct {
-	once sync.Once
-	json []byte
-	err  error
+	once         sync.Once
+	sdk, console []byte
+	err          error
 }
 
-func (s *Server) handleOpenAPI(w http.ResponseWriter, r *http.Request) {
-	s.spec.once.Do(func() { s.spec.json, s.spec.err = s.OpenAPISpec() })
+func (s *Server) serveSpec(w http.ResponseWriter, r *http.Request, aud Audience) {
+	s.spec.once.Do(func() {
+		if s.spec.sdk, s.spec.err = s.OpenAPISpec(AudienceSDK); s.spec.err == nil {
+			s.spec.console, s.spec.err = s.OpenAPISpec(AudienceConsole)
+		}
+	})
 	if s.spec.err != nil {
 		s.writeErr(w, r, s.spec.err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-cache")
-	w.Write(s.spec.json)
+	if aud == AudienceConsole {
+		w.Write(s.spec.console)
+		return
+	}
+	w.Write(s.spec.sdk)
 }
 
-// OpenAPISpec returns the generated spec as JSON (for `pushq openapi`).
-func (s *Server) OpenAPISpec() ([]byte, error) {
+func (s *Server) handleOpenAPI(w http.ResponseWriter, r *http.Request) {
+	s.serveSpec(w, r, AudienceSDK)
+}
+func (s *Server) handleConsoleOpenAPI(w http.ResponseWriter, r *http.Request) {
+	s.serveSpec(w, r, AudienceConsole)
+}
+
+// OpenAPISpec returns one audience's generated spec as JSON (for `pushq openapi`).
+func (s *Server) OpenAPISpec(aud Audience) ([]byte, error) {
 	if s.routes == nil {
 		s.Router()
 	}
-	spec, err := openAPI(s.routes)
+	spec, err := openAPI(s.routes, aud)
 	if err != nil {
 		return nil, err
 	}

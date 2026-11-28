@@ -51,13 +51,16 @@ type keyDTO struct {
 	Name       string     `json:"name"`
 	Prefix     string     `json:"prefix"`
 	Role       string     `json:"role"`
+	AppID      int64      `json:"app_id,omitempty" doc:"Set when the key can only reach this application."`
+	AppName    string     `json:"app_name,omitempty"`
 	CreatedBy  string     `json:"created_by,omitempty"`
 	CreatedAt  time.Time  `json:"created_at"`
 	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
 }
 
 func toKeyDTO(k accounts.APIKey) keyDTO {
-	return keyDTO{ID: k.ID, Name: k.Name, Prefix: k.Prefix, Role: string(k.Role), CreatedBy: k.CreatedByEmail,
+	return keyDTO{ID: k.ID, Name: k.Name, Prefix: k.Prefix, Role: string(k.Role), AppID: k.AppID, AppName: k.AppName,
+		CreatedBy: k.CreatedByEmail,
 		CreatedAt: k.CreatedAt, LastUsedAt: k.LastUsedAt}
 }
 
@@ -292,6 +295,9 @@ type inviteCreateBody struct {
 type keyCreateBody struct {
 	Name string           `json:"name" doc:"What uses the key, e.g. billing-service."`
 	Role accounts.KeyRole `json:"role" enum:"admin,writer"`
+	// AppID restricts the key to one application; omit it for a key that
+	// can reach all of them (choosing one per request with X-PushQ-App).
+	AppID int64 `json:"app_id,omitempty" doc:"Restrict the key to this application. Omit for access to every application."`
 }
 
 type credentialsBody struct {
@@ -586,7 +592,7 @@ func (s *Server) handleKeyCreate(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, r, err)
 		return
 	}
-	secret, k, err := s.Accounts.CreateAPIKey(r.Context(), teamID(principal(r)), body.Name, body.Role, createdBy(principal(r)), s.Now())
+	secret, k, err := s.Accounts.CreateAPIKey(r.Context(), teamID(principal(r)), body.AppID, body.Name, body.Role, createdBy(principal(r)), s.Now())
 	if err != nil {
 		s.writeErr(w, r, err)
 		return

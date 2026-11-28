@@ -6,6 +6,7 @@
 	import * as Card from '$lib/components/ui/card';
 	import ErrorAlert from '$lib/components/ErrorAlert.svelte';
 	import Field from '$lib/components/Field.svelte';
+	import PanelHeader from '$lib/components/settings/PanelHeader.svelte';
 
 	let name = $state(auth.user?.name ?? '');
 	let nameMsg = $state<string | null>(null);
@@ -54,10 +55,12 @@
 	<title>Your account · pushq</title>
 </svelte:head>
 
+<PanelHeader title="Your account" description="Your name, how you sign in, and your password." />
+
 {#if !auth.user}
-	<p class="text-sm text-muted-foreground">You're not signed in with a dashboard account.</p>
+	<p class="mt-6 text-sm text-muted-foreground">You're not signed in with a dashboard account.</p>
 {:else}
-	<div class="grid gap-6 md:grid-cols-2">
+	<div class="mt-6 grid gap-6 lg:grid-cols-2">
 		<Card.Root>
 			<Card.Header>
 				<Card.Title>Profile</Card.Title>

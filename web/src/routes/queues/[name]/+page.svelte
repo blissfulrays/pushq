@@ -3,10 +3,14 @@
 	import { page } from '$app/state';
 	import { api, errorMessage, type Queue, type QueueStats, type Task } from '$lib/api';
 	import { auth } from '$lib/auth.svelte';
+	import { appContext } from '$lib/app-context.svelte';
+	import { apps } from '$lib/apps.svelte';
 	import { absoluteTime, duration, num, truncateMiddle } from '$lib/format';
 	import { Button } from '$lib/components/ui/button';
 	import * as Card from '$lib/components/ui/card';
-	import * as Table from '$lib/components/ui/table';
+	import DataTable from '$lib/components/data-table/DataTable.svelte';
+	import type { Column } from '$lib/components/data-table/features';
+	import { renderSnippet } from '@tanstack/svelte-table';
 	import Tabs from '$lib/components/ui/tabs/tabs.svelte';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 	import ErrorAlert from '$lib/components/ErrorAlert.svelte';
@@ -72,6 +76,8 @@
 
 	$effect(() => {
 		auth.key;
+		appContext.id;
+		if (apps.list === null) return; // wait until the application is known
 		const q = name;
 		if (!q) return;
 		queue = null;
@@ -83,6 +89,8 @@
 
 	$effect(() => {
 		auth.key;
+		appContext.id;
+		if (apps.list === null) return; // wait until the application is known
 		const q = name;
 		const filter = stateFilter;
 		const token = pageToken;
@@ -127,6 +135,34 @@
 			}
 		});
 	});
+
+	const taskColumns: Column<Task>[] = [
+		{
+			id: 'id',
+			header: 'ID',
+			class: 'font-mono text-xs',
+			cell: ({ row }) => renderSnippet(idCell, row.original)
+		},
+		{ id: 'state', header: 'State', cell: ({ row }) => renderSnippet(taskStateCell, row.original) },
+		{
+			id: 'scheduled',
+			header: 'Scheduled',
+			class: 'text-muted-foreground',
+			cell: ({ row }) => renderSnippet(scheduledCell, row.original)
+		},
+		{
+			id: 'dispatches',
+			header: 'Dispatches',
+			class: 'text-right tabular-nums',
+			cell: ({ row }) => num(row.original.dispatch_count)
+		},
+		{
+			id: 'last',
+			header: 'Last attempt',
+			class: 'max-w-56',
+			cell: ({ row }) => renderSnippet(lastAttemptCell, row.original)
+		}
+	];
 
 	async function togglePause() {
 		if (!queue) return;
@@ -312,80 +348,14 @@
 			<Tabs value={stateFilter} options={filterOptions} onValueChange={setFilter} />
 		</div>
 
-		<div class="rounded-xl border">
-			<Table.Root>
-				<Table.Header>
-					<Table.Row>
-						<Table.Head>ID</Table.Head>
-						<Table.Head>State</Table.Head>
-						<Table.Head>Scheduled</Table.Head>
-						<Table.Head class="text-right">Dispatches</Table.Head>
-						<Table.Head>Last attempt</Table.Head>
-					</Table.Row>
-				</Table.Header>
-				<Table.Body>
-					{#if tasks === null}
-						<Table.Row>
-							<Table.Cell colspan={5} class="h-16 text-center text-muted-foreground">
-								Loading…
-							</Table.Cell>
-						</Table.Row>
-					{:else if tasks.length === 0}
-						<Table.Row>
-							<Table.Cell colspan={5} class="h-16 text-center text-muted-foreground">
-								No {stateFilter || ''} tasks.
-							</Table.Cell>
-						</Table.Row>
-					{:else}
-						{#each tasks as t (t.id)}
-							<Table.Row
-								class="cursor-pointer"
-								role="link"
-								tabindex={0}
-								onclick={() => openTask(t.id)}
-								onkeydown={(e) => {
-									if (e.key === 'Enter') openTask(t.id);
-								}}
-							>
-								<Table.Cell class="font-mono text-xs" title={t.id}>
-									{truncateMiddle(t.id, 26)}
-								</Table.Cell>
-								<Table.Cell><StateBadge state={t.state} /></Table.Cell>
-								<Table.Cell class="text-muted-foreground">
-									<TimeStamp value={t.schedule_time} />
-								</Table.Cell>
-								<Table.Cell class="text-right tabular-nums">{num(t.dispatch_count)}</Table.Cell>
-								<Table.Cell class="max-w-56">
-									{#if t.last_attempt && (t.last_attempt.status || t.last_attempt.error)}
-										<div class="flex items-center gap-2">
-											{#if t.last_attempt.status}
-												<span
-													class="font-mono text-xs {t.last_attempt.status < 400
-														? 'text-emerald-600 dark:text-emerald-400'
-														: 'text-red-600 dark:text-red-400'}"
-												>
-													{t.last_attempt.status}
-												</span>
-											{/if}
-											{#if t.last_attempt.error}
-												<span
-													class="truncate text-xs text-muted-foreground"
-													title={t.last_attempt.error}
-												>
-													{t.last_attempt.error}
-												</span>
-											{/if}
-										</div>
-									{:else}
-										<span class="text-muted-foreground">—</span>
-									{/if}
-								</Table.Cell>
-							</Table.Row>
-						{/each}
-					{/if}
-				</Table.Body>
-			</Table.Root>
-		</div>
+		<DataTable
+			data={tasks}
+			columns={taskColumns}
+			getRowId={(t) => t.id}
+			onRowClick={(t) => openTask(t.id)}
+			rowLabel={(t) => `Task ${t.id}`}
+			empty={`No ${stateFilter || ''} tasks.`}
+		/>
 
 		<Pager bind:page={pageNum} bind:pageSize hasNext={!!nextToken} storageKey="tasks" noun="tasks" />
 	</div>
@@ -399,3 +369,38 @@
 	{busy}
 	onconfirm={doPurge}
 />
+
+{#snippet idCell(t: Task)}
+	<span title={t.id}>{truncateMiddle(t.id, 26)}</span>
+{/snippet}
+
+{#snippet taskStateCell(t: Task)}
+	<StateBadge state={t.state} />
+{/snippet}
+
+{#snippet scheduledCell(t: Task)}
+	<TimeStamp value={t.schedule_time} />
+{/snippet}
+
+{#snippet lastAttemptCell(t: Task)}
+	{#if t.last_attempt && (t.last_attempt.status || t.last_attempt.error)}
+		<div class="flex items-center gap-2">
+			{#if t.last_attempt.status}
+				<span
+					class="font-mono text-xs {t.last_attempt.status < 400
+						? 'text-success'
+						: 'text-destructive'}"
+				>
+					{t.last_attempt.status}
+				</span>
+			{/if}
+			{#if t.last_attempt.error}
+				<span class="truncate text-xs text-muted-foreground" title={t.last_attempt.error}>
+					{t.last_attempt.error}
+				</span>
+			{/if}
+		</div>
+	{:else}
+		<span class="text-muted-foreground">—</span>
+	{/if}
+{/snippet}

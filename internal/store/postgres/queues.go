@@ -359,6 +359,9 @@ func (s *Store) ListQueues(ctx context.Context, opts store.ListQueuesOpts) ([]st
 		query += ` AND name LIKE $2 ESCAPE '\'`
 		args = append(args, escapeLike(opts.NamePrefix)+"%")
 	}
+	if opts.RootOnly {
+		query += ` AND name NOT LIKE '%:%'`
+	}
 	query += fmt.Sprintf(` ORDER BY name LIMIT $%d`, len(args)+1)
 	args = append(args, size+1)
 

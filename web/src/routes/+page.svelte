@@ -8,7 +8,12 @@
 	import { Button, buttonVariants } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import * as Card from '$lib/components/ui/card';
-	import * as Table from '$lib/components/ui/table';
+	import DataTable from '$lib/components/data-table/DataTable.svelte';
+	import type { Column } from '$lib/components/data-table/features';
+	import { renderSnippet } from '@tanstack/svelte-table';
+	import { appContext } from '$lib/app-context.svelte';
+	import { apps } from '$lib/apps.svelte';
+	import AppAvatar from '$lib/components/apps/AppAvatar.svelte';
 	import ErrorAlert from '$lib/components/ErrorAlert.svelte';
 	import FolderCrumbs from '$lib/components/FolderCrumbs.svelte';
 	import StateBadge from '$lib/components/StateBadge.svelte';
@@ -65,16 +70,17 @@
 		}
 	}
 
-	// Clear the filter and stale rows when moving between folders.
-	let lastFolder: string | undefined;
+	// Clear the filter and stale rows when moving between folders or applications.
+	let lastView: string | undefined;
 	$effect.pre(() => {
-		if (folder !== lastFolder) {
-			if (lastFolder !== undefined) {
+		const view = `${appContext.id}|${folder}`;
+		if (view !== lastView) {
+			if (lastView !== undefined) {
 				filter = '';
 				queues = null;
 				pageNum = 1;
 			}
-			lastFolder = folder;
+			lastView = view;
 		}
 	});
 
@@ -92,7 +98,9 @@
 
 	let lastTyped: string | undefined;
 	$effect(() => {
-		auth.key; // refetch when the key changes
+		auth.key; // refetch when the key or the application changes
+		appContext.id;
+		if (apps.list === null) return; // wait until the application is known
 		const typed = filter.trim();
 		const p = folderPrefix + typed;
 		// Debounce typing only; first load and folder changes fetch at once.
@@ -146,6 +154,19 @@
 		if (n) goto(queueHref(n));
 	}
 
+	const rowId = (row: Row) => (row.kind === 'folder' ? `f:${row.path}` : `q:${row.queue.name}`);
+
+	const columns: Column<Row>[] = [
+		{ id: 'name', header: 'Name', cell: ({ row }) => renderSnippet(nameCell, row.original) },
+		{ id: 'state', header: 'State', cell: ({ row }) => renderSnippet(stateCell, row.original) },
+		{
+			id: 'created',
+			header: 'Created',
+			class: 'text-right text-muted-foreground',
+			cell: ({ row }) => renderSnippet(createdCell, row.original)
+		}
+	];
+
 	function folderSummary(f: FolderRow) {
 		const parts = [`${f.queues} queue${f.queues === 1 ? '' : 's'}`];
 		if (f.paused) parts.push(`${f.paused} paused`);
@@ -158,15 +179,23 @@
 	<title>{folder ? `${folder} · ` : ''}Queues · pushq</title>
 </svelte:head>
 
-<div class="space-y-6">
+<div class="pq-rise space-y-6">
 	<div class="flex flex-wrap items-end justify-between gap-3">
 		<div class="min-w-0">
 			{#if folder}
 				<FolderCrumbs {folder} linkLast={false} />
 				<h1 class="mt-1 truncate font-mono text-xl font-semibold tracking-tight">{folder}/</h1>
 			{:else}
-				<h1 class="text-xl font-semibold tracking-tight">Queues</h1>
-				<p class="mt-1 text-sm text-muted-foreground">Everything this server is dispatching.</p>
+				{#if apps.current}
+					<p class="flex items-center gap-2 font-mono text-[13px] text-subtle">
+						<AppAvatar id={apps.current.id} name={apps.current.name} icon={apps.current.icon} class="size-5 rounded-md text-[8px]" />
+						{apps.current.name}{apps.current.default ? ' · default' : ''}
+					</p>
+				{/if}
+				<h1 class="mt-2 text-[28px] font-semibold leading-tight tracking-[-0.05em]">Queues</h1>
+				<p class="mt-1 text-sm text-muted-foreground">
+					{apps.current ? `Everything ${apps.current.name} is dispatching.` : 'Everything this server is dispatching.'}
+				</p>
 			{/if}
 		</div>
 		{#if !forbidden && !firstRun}
@@ -229,82 +258,23 @@
 			</div>
 		</div>
 	{:else}
-		<div class="rounded-xl border">
-			<Table.Root>
-				<Table.Header>
-					<Table.Row>
-						<Table.Head>Name</Table.Head>
-						<Table.Head>State</Table.Head>
-						<Table.Head class="text-right">Created</Table.Head>
-					</Table.Row>
-				</Table.Header>
-				<Table.Body>
-					{#if queues === null}
-						<Table.Row>
-							<Table.Cell colspan={3} class="h-16 text-center text-muted-foreground">
-								Loading…
-							</Table.Cell>
-						</Table.Row>
-					{:else if rows.length === 0}
-						<Table.Row>
-							<Table.Cell colspan={3} class="h-16 text-center text-muted-foreground">
-								{#if searching}
-									No queues matching “{folderPrefix}{filter.trim()}”.
-								{:else if folder}
-									No queues in {folder}/.
-								{:else}
-									No queues yet.
-								{/if}
-							</Table.Cell>
-						</Table.Row>
-					{:else}
-						{#each paged.rows as row (row.kind === 'folder' ? `f:${row.path}` : `q:${row.queue.name}`)}
-							<Table.Row
-								class="cursor-pointer"
-								role="link"
-								tabindex={0}
-								onclick={() => open(row)}
-								onkeydown={(e) => {
-									if (e.key === 'Enter') open(row);
-								}}
-							>
-								{#if row.kind === 'folder'}
-									<Table.Cell class="font-mono text-[13px] font-medium">
-										<span class="inline-flex items-center gap-2">
-											<svg
-												class="size-4 shrink-0 text-muted-foreground"
-												viewBox="0 0 24 24"
-												fill="none"
-												stroke="currentColor"
-												stroke-width="2"
-												stroke-linecap="round"
-												stroke-linejoin="round"
-												aria-hidden="true"
-											>
-												<path
-													d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"
-												/>
-											</svg>
-											{row.label}/
-										</span>
-									</Table.Cell>
-									<Table.Cell class="text-xs text-muted-foreground">{folderSummary(row)}</Table.Cell>
-									<Table.Cell></Table.Cell>
-								{:else}
-									<Table.Cell class="font-mono text-[13px] font-medium" title={row.queue.name}>
-										{row.label}
-									</Table.Cell>
-									<Table.Cell><StateBadge kind="queue" state={row.queue.state} /></Table.Cell>
-									<Table.Cell class="text-right text-muted-foreground">
-										<TimeStamp value={row.queue.created_at} />
-									</Table.Cell>
-								{/if}
-							</Table.Row>
-						{/each}
-					{/if}
-				</Table.Body>
-			</Table.Root>
-		</div>
+		<DataTable
+			data={queues === null ? null : paged.rows}
+			{columns}
+			getRowId={rowId}
+			onRowClick={open}
+			rowLabel={(row) => (row.kind === 'folder' ? `Folder ${row.path}` : `Queue ${row.queue.name}`)}
+		>
+			{#snippet emptySnippet()}
+				{#if searching}
+					No queues matching “{folderPrefix}{filter.trim()}”.
+				{:else if folder}
+					No queues in {folder}/.
+				{:else}
+					No queues yet.
+				{/if}
+			{/snippet}
+		</DataTable>
 		{#if queues !== null && rows.length > 0}
 			<Pager
 				bind:page={pageNum}
@@ -324,3 +294,39 @@
 		{/if}
 	{/if}
 </div>
+
+{#snippet nameCell(row: Row)}
+	{#if row.kind === 'folder'}
+		<span class="inline-flex items-center gap-2 font-mono text-[13px] font-medium">
+			<svg
+				class="size-4 shrink-0 text-muted-foreground"
+				viewBox="0 0 24 24"
+				fill="none"
+				stroke="currentColor"
+				stroke-width="2"
+				stroke-linecap="round"
+				stroke-linejoin="round"
+				aria-hidden="true"
+			>
+				<path
+					d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"
+				/>
+			</svg>
+			{row.label}/
+		</span>
+	{:else}
+		<span class="font-mono text-[13px] font-medium" title={row.queue.name}>{row.label}</span>
+	{/if}
+{/snippet}
+
+{#snippet stateCell(row: Row)}
+	{#if row.kind === 'folder'}
+		<span class="text-xs text-muted-foreground">{folderSummary(row)}</span>
+	{:else}
+		<StateBadge kind="queue" state={row.queue.state} />
+	{/if}
+{/snippet}
+
+{#snippet createdCell(row: Row)}
+	{#if row.kind === 'queue'}<TimeStamp value={row.queue.created_at} />{/if}
+{/snippet}
