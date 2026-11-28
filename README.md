@@ -17,8 +17,7 @@
   <a href="https://pushqueue.dev"><strong>Website</strong></a> ·
   <a href="https://pushqueue.dev/docs/"><strong>Documentation</strong></a> ·
   <a href="https://pushqueue.dev/docs/getting-started/quickstart/">Quickstart</a> ·
-  <a href="https://pushqueue.dev/docs/reference/api/">API reference</a> ·
-  <a href="https://pushqueue.dev/pricing">Pricing</a>
+  <a href="https://pushqueue.dev/docs/reference/api/">API reference</a>
 </p>
 
 <p align="center">
