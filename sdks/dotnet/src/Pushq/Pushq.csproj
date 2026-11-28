@@ -16,7 +16,7 @@
     <Deterministic>true</Deterministic>
 
     <!-- Overwritten by the release workflow (-p:Version=X.Y.Z). -->
-    <Version>0.1.0-dev</Version>
+    <Version>1.0.0-dev</Version>
 
     <PackageId>Pushq</PackageId>
     <Authors>blissfulrays</Authors>

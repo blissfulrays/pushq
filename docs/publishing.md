@@ -54,11 +54,12 @@ pip index versions pushq  # or: curl -s -o /dev/null -w '%{http_code}\n' https:/
 
 **Decide the version.** Everything shares the tag's version — tag `v0.1.0` and
 npm, PyPI, and Maven all publish `0.1.0`. The workflow rewrites the version
-strings at build time, so the committed `0.1.0` / `0.1.0-SNAPSHOT` values are
+strings at build time, so the committed `1.0.0` / `1.0.0-SNAPSHOT` / `1.0.0-dev` values are
 just placeholders you never have to keep in sync by hand.
 
-Start at `0.1.0` and stay `0.x` while the API can still change — that
-communicates "not stable yet" in every ecosystem's conventions.
+pushq left beta at `1.0.0`: from here, automatic releases bump the patch
+version (`1.0.0` → `1.0.1`); cut a minor or major release by running the
+workflow by hand with an explicit version.
 
 ---
 
